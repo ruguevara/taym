@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+*.taym
+*.wav
+
+# Spec docs vendored into the package at build time by python/hatch_build.py;
+# the source of truth is docs/ at the repo root.
+python/src/taym/docs/

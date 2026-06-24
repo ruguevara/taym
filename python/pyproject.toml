@@ -1,0 +1,62 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "taym"
+version = "0.1.0"
+description = "TAYM chip-music interchange format: reference reader/writer/validator + AY reference renderer"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "Ru Grantez", email = "ruslan.gr@gmail.com" }]
+keywords = ["chiptune", "AY-3-8910", "YM2149", "ZX-Spectrum", "Atari ST", "demoscene", "music", "interchange", "PSG"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Multimedia :: Sound/Audio",
+    "Topic :: Software Development :: Libraries",
+]
+# Core (codec/validator/stats/dump) is dependency-free. The reference renderer
+# (taym.engine) needs numpy + pyayay; pull them via the optional 'engine' extra:
+# `pip install taym[engine]`. Engine deps are imported lazily, so the core lib
+# stays importable and usable without them.
+dependencies = []
+
+[project.optional-dependencies]
+engine = [
+    "numpy>=1.21",
+    "pyayay>=0.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/ruguevara/taym"
+Repository = "https://github.com/ruguevara/taym"
+Documentation = "https://github.com/ruguevara/taym/blob/master/docs/TAYM-format-draft-0.1.md"
+
+[project.scripts]
+taym = "taym.__main__:main"
+taym-render = "taym.engine.__main__:main"
+
+# The spec docs live once at the repo root (../docs). hatch_build.py copies them
+# into src/taym/docs/ before each build so they ship inside the package at
+# taym/docs/ on every build path (see that file for why a force-include won't do).
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/taym"]
+# .md files (engine README + vendored spec docs) are non-.py, so name them.
+artifacts = ["src/taym/engine/*.md", "src/taym/docs/*.md"]
+
+[tool.hatch.build.targets.sdist]
+# Pull README + LICENSE in so the sdist is self-describing; the build hook adds
+# the vendored docs under src/taym/docs/.
+include = ["src/taym", "tests", "pyproject.toml", "README.md", "CHANGELOG.md"]
+artifacts = ["src/taym/docs/*.md"]
+force-include = { "../LICENSE" = "LICENSE" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
