@@ -1,0 +1,72 @@
+name: release
+
+# Build the python/ package on any v* tag and publish via PyPI Trusted
+# Publishing (OIDC -- no API tokens stored as secrets). Prerelease tags
+# (v1.2.3rc1, v1.2.3b1, v1.2.3a1) go to TestPyPI; final tags (v1.2.3) go to
+# real PyPI. The build runs in python/ so the build hook can vendor ../docs.
+#
+# One-time setup on each index (project -> Publishing -> add a trusted
+# publisher), matching this file:
+#   owner=ruguevara  repo=taym  workflow=release.yml
+#   environment=pypi      (for PyPI)
+#   environment=testpypi  (for TestPyPI)
+# For the very first upload of a new project name, register it as a *pending*
+# publisher before the project exists.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Build
+        working-directory: python    # build hook vendors ../docs from here
+        run: |
+          python -m pip install --upgrade pip build twine
+          python -m build
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: python/dist/*
+
+  publish-testpypi:
+    # Prerelease tags only: v1.2.3rc1 / v1.2.3b1 / v1.2.3a1.
+    if: contains(github.ref_name, 'rc') || contains(github.ref_name, 'a') || contains(github.ref_name, 'b')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write              # OIDC for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    # Final tags only: no prerelease marker in the tag name.
+    if: ${{ !(contains(github.ref_name, 'rc') || contains(github.ref_name, 'a') || contains(github.ref_name, 'b')) }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write              # OIDC for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
