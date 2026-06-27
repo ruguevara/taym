@@ -83,6 +83,10 @@ header_size + chunk_bytes
 `chunk_bytes` is mandatory and nonzero. Reading to EOF is not an alternative.
 Trailing bytes are invalid. There is no file checksum.
 
+`chunk_bytes` is u32, so the chunk stream (and thus the file) is bounded just
+under 4 GiB. This is ample: a 4-minute 50 Hz 6-timer `MODS` is ~1.1 MB
+(section 12). The format does not target files larger than 4 GiB.
+
 ## 3. Chunk container
 
 Every chunk has an 8-byte header:
@@ -182,6 +186,10 @@ When `loop_frame` is present:
 - every timer's `MODS` record at `loop_frame` is `START` or `STOP`.
 
 This makes timer state at `loop_frame` independent of the previous iteration.
+In particular a *quiescent* timer (a no-loop timer lane that ran out, section
+10.2) carries running state that is not reconstructable on its own, which is
+exactly why `EMPTY`/`MODULATE` are forbidden at `loop_frame`: the `START`/`STOP`
+requirement re-establishes or releases that state explicitly.
 
 Background chip register state is a different matter. A frame-data stream
 (section 6.2) is coded in a platform-dependent way -- the embedded Bulba `.psg`
@@ -215,6 +223,10 @@ comment
 
 Readers may ignore or preserve unknown keys.
 
+Values are arbitrary UTF-8, so `INFO` (`title`, `author`, ...) is the place for
+non-ASCII naming. `CHIP.name` (section 6) is a printable-ASCII hardware label,
+not a display title -- producers must not put UTF-8 there.
+
 ## 6. Chip instances -- `CHIP`
 
 `CHIP` is an array of 32-byte records:
@@ -231,6 +243,10 @@ Readers may ignore or preserve unknown keys.
 
 The number of records equals `TRAK.chip_count`. Chip index is the record
 index.
+
+`clock_hz` is an integer because chip master clocks are integer crystals;
+`TRAK.frame_rate` is 16.16 because frame rates can be fractional (e.g. an
+NTSC-derived 59.94 Hz). The two encodings differ deliberately.
 
 `name` is informational. It may occupy all 16 bytes without a terminator.
 
@@ -301,6 +317,10 @@ Example:
 ```text
 song.taym + PSG0 -> song.PSG0.psg
 ```
+
+The tag is copied into the filename verbatim, preserving its case. Tags are
+uppercase letters/digits (section 3), so the sidecar component is uppercase;
+matching is case-sensitive where the host filesystem is.
 
 The Bulba stream preserves the register writes present in each frame,
 including write-sensitive repeated writes represented by the source.
@@ -460,6 +480,12 @@ effective_rate = base_rate * multiplier
 For a `CHIP_PERIOD` timer, the base rate is first derived from the stored
 period and chip clock. The multiplier does not directly multiply the encoded
 period.
+
+The 16.16 ceiling (section 7) bounds the *encoded* multiplier, not the product.
+`effective_rate` is a derived quantity, never re-encoded as 16.16, so only its
+realizability on the target matters -- a multiplier that pushes the effective
+rate above the ABS_RATE_HZ ceiling is well-formed, and the conversion clamps or
+approximates per the target's capability (section 12.3).
 
 The persistent base and timer lane compose as:
 
@@ -982,6 +1008,11 @@ All are write targets.
 0x0E..0x7F  unassigned -> invalid
 ```
 
+The hardware range is not producer-extensible: `0x0E..0x7F` are invalid for a
+standardized AY chip, not a private scratch area (section 11). A private AY-like
+engine that needs extra modulation targets uses the engine-interpreted range
+(A.3, `0xC0..0xFF`), not unassigned hardware IDs.
+
 `target_id == 0x0D` (R13) is write-sensitive: every write retriggers the
 envelope. This is the `INLINE_VALUE` retrigger case of example 15.2 and the
 write-sensitive concern behind no-loop lane dormancy (section 9.1).
@@ -989,13 +1020,17 @@ write-sensitive concern behind no-loop lane dormancy (section 9.1).
 R14/R15 (the AY I/O port data registers) are not sound registers and have no
 target ID; they are not addressable by timers.
 
-### A.3 Virtual targets (engine-interpreted, `target_id` 0xC0..0xFF)
+### A.3 Virtual targets (`target_id` 0x80..0xFF)
 
-Draft 0.1 assigns none for AY. The format-specified virtual range
-(`0x80..0x82`, section 11) applies to AY sample-playback engines unchanged. The
-engine-interpreted range `0xC0..0xFF` is reserved for AY synthesis engines
-(e.g. software duty/DDS buzzers) and is defined by each such engine's
-producer/consumer contract, not by this appendix.
+This covers both virtual sub-ranges of section 11 as they apply to AY:
+
+- the format-specified virtual range (`0x80..0x82`, section 11) applies to AY
+  sample-playback engines unchanged; `0x83..0xBF` are reserved (invalid);
+- the engine-interpreted range `0xC0..0xFF` is reserved for AY synthesis engines
+  (e.g. software duty/DDS buzzers) and is defined by each such engine's
+  producer/consumer contract, not by this appendix.
+
+Draft 0.1 assigns no AY-specific engine-interpreted targets in `0xC0..0xFF`.
 
 ### A.4 Registry status
 

@@ -156,7 +156,7 @@ chunk_bytes  4   u32  exact size of the chunk stream
 
 **Chunk header (8)**, before every chunk's payload
 ```
-tag          4   4 ASCII A-Z/0-9
+tag          4   four ASCII uppercase letters or digits
 size         4   u32  payload bytes (excludes this header)
 ```
 
@@ -199,7 +199,8 @@ action_count      1   u8
 command           1   u8   0 EMPTY, 1 START, 2 MODULATE, 3 STOP
 resv              2
 ```
-(for EMPTY/STOP the first four fields are ignored, not validated)
+(for EMPTY/STOP the first four fields are ignored -- a canonical writer zeroes
+them; only `resv` is validated as zero)
 
 **ACTN (6)** -- one per (target <- source) binding
 ```
