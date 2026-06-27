@@ -24,8 +24,9 @@ stream + timers"):
    background for them, firing *between* frames (much faster than 50 Hz) to do
    PWM, duty sweeps, envelope retriggers. Fast movement.
 
-Out of scope: sample virtual targets (`0x80..0x82`), multi-chip mixing beyond
-"last writer wins" (the validator forbids the conflicting case anyway).
+Out of scope: the format-virtual range (`0x80..0xBF`, reserved in draft 0.1),
+multi-chip mixing beyond "last writer wins" (the validator forbids the
+conflicting case anyway).
 
 ## The render loop
 

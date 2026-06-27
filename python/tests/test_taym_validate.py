@@ -123,8 +123,16 @@ def test_tlan_slice_oob():
 
 
 def test_action_target_reserved():
-    m = fresh(); m.actions[0].target_id = 0x90  # 0x83..0xBF reserved
+    m = fresh(); m.actions[0].target_id = 0x90  # 0x80..0xBF reserved in draft 0.1
     has(validate(m), "reserved/invalid")
+
+
+def test_format_virtual_range_all_reserved():
+    # Draft 0.1 defines no format-virtual target: 0x80..0x82 (the former
+    # sample amplitude/index/rate) are now reserved -> invalid.
+    for tid in (0x80, 0x81, 0x82):
+        m = fresh(); m.actions[0].target_id = tid
+        has(validate(m), "reserved/invalid")
 
 
 def test_action_bind_lane_oob():

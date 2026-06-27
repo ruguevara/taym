@@ -83,12 +83,13 @@ A target is what an action writes. Target IDs are chip-local, 8-bit, split:
 
 ```
 0x00..0x7F  real hardware registers (AY R0..R13 -- see appendix A of the spec)
-0x80..0xBF  format-defined virtual: 0x80 sample amp, 0x81 sample idx, 0x82 rate
+0x80..0xBF  format-defined virtual: reserved in draft 0.1 (future samples)
 0xC0..0xFF  engine-private virtual targets (per chip type)
 ```
 
-Virtual targets let you modulate things the register stream can't reach -- e.g.
-a sample's amplitude independent of its sample data.
+The format-virtual range is where future sample/wavetable targets will live,
+but draft 0.1 defines none -- it's reserved. (There's no sample store: samples
+are just lane data written at the timer rate, so pitch is the timer interval.)
 
 ## File layout at a glance
 

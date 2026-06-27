@@ -146,11 +146,10 @@ def ay_stereo_layout(config: int) -> int:
 TGT_HW_RANGE = (0x00, 0x7F)         # real chip registers
 TGT_FMT_VIRTUAL_RANGE = (0x80, 0xBF)
 TGT_ENGINE_RANGE = (0xC0, 0xFF)     # registry-assigned, or private chip type
-# format-specified virtual targets (chip-independent)
-TGT_SAMPLE_AMPLITUDE = 0x80
-TGT_SAMPLE_INDEX = 0x81
-TGT_SAMPLE_RATE = 0x82
-TGT_FMT_VIRTUAL_DEFINED = (0x80, 0x81, 0x82)  # 0x83..0xBF reserved -> invalid
+# format-specified virtual targets (chip-independent). None are defined in
+# draft 0.1: the whole 0x80..0xBF range is reserved -> invalid until a later
+# draft defines the sample/wavetable model (S11).
+TGT_FMT_VIRTUAL_DEFINED = ()  # 0x80..0xBF reserved -> invalid
 
 # AY hardware targets R0..R13 = 0x00..0x0D; 0x0E..0x7F unassigned/invalid (A.2)
 AY_TARGET_MAX = 0x0D

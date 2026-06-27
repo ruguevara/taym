@@ -150,7 +150,7 @@ def _tlanes(t: Taym, p):
 def _valid_target(tid: int) -> bool:
     lo, hi = spec.TGT_FMT_VIRTUAL_RANGE
     if lo <= tid <= hi:
-        return tid in spec.TGT_FMT_VIRTUAL_DEFINED  # 0x83..0xBF reserved -> invalid
+        return tid in spec.TGT_FMT_VIRTUAL_DEFINED  # 0x80..0xBF reserved -> invalid
     # hardware + engine ranges: openness depends on chip type; AY checks elsewhere.
     return True
 
@@ -166,8 +166,9 @@ def _actions(t: Taym, p):
 
 
 def _ay_target_ok(tid: int) -> bool:
-    # Appendix A.2/A.3: R0..R13 hardware and format-virtual 0x80..0x82 only.
-    # All other AY targets are invalid until a later AY registry assigns them.
+    # Appendix A.2/A.3: R0..R13 hardware only. No format-virtual target is
+    # defined in draft 0.1; all other AY targets are invalid until a later
+    # registry assigns them.
     if tid <= spec.AY_TARGET_MAX:
         return True
     if spec.TGT_HW_RANGE[0] <= tid <= spec.TGT_HW_RANGE[1]:

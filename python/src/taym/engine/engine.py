@@ -15,8 +15,9 @@ single AY chip:
 
 Scope: the subset the converters emit (one active timer per chip is the common
 case; multiple are rendered independently and the last writer to a shared
-target wins within a frame, which the validator already forbids). Sample
-virtual targets (0x80..0x82) are not modeled -- this is an AY-register oracle.
+target wins within a frame, which the validator already forbids). The
+format-virtual range (0x80..0xBF) is reserved in draft 0.1 and not modeled --
+this is an AY-register oracle.
 """
 from __future__ import annotations
 

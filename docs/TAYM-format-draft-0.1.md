@@ -512,24 +512,24 @@ Target IDs are chip-local. The 8-bit space is split:
 0x00..0x7F  hardware registers      real chip registers (e.g. AY R0..R13),
                                     standardized per chip type
 0x80..0xBF  format-specified virtual engine-interpreted targets with a
-                                    format-wide meaning, defined below:
-              0x80  sample amplitude
-              0x81  sample index
-              0x82  sample rate
-              0x83..0xBF  reserved for future format-specified virtual targets
+                                    format-wide meaning. None are defined in
+                                    draft 0.1: the whole range is reserved for
+                                    a future sample/wavetable model.
 0xC0..0xFF  engine-interpreted      assigned by the chip registry, or by a
                                     private chip type's producer/consumer
                                     contract
 ```
 
 A virtual target is not a hardware register; it modulates an engine-level
-parameter the frame-data stream cannot reach. This is what lets a sample's
-amplitude, index, or rate be driven by a lane independently of its sample data.
+parameter the frame-data stream cannot reach. Draft 0.1 defines none: the
+sample/wavetable model (where such targets will live) is deferred to a later
+draft. There is no separate sample store yet -- sample and wavetable playback
+is ordinary lane data written at the timer's rate, so pitch is the timer
+interval.
 
 The hardware range is standardized per chip type by the separate target
 registry (the AY assignments are in appendix A). The format-specified virtual
-range has a fixed, chip-independent meaning (`0x80..0x82` defined here;
-`0x83..0xBF` reserved -- invalid until a later version assigns them). The
+range (`0x80..0xBF`) is reserved -- invalid until a later draft assigns it. The
 engine-interpreted range is valid only when assigned by the chip registry, or
 when used with a private chip type.
 
@@ -919,9 +919,9 @@ target ID; they are not addressable by timers.
 
 ### A.3 Virtual targets (`target_id` 0x80..0xFF)
 
-For `chip_type_id == 0x01`, draft 0.1 assigns only `0x80..0x82` from section
-11. `0x83..0xFF` are invalid unless assigned by a later AY registry version.
-Private AY-like engines use a private `chip_type_id`.
+For `chip_type_id == 0x01`, draft 0.1 assigns no virtual target: `0x80..0xFF`
+are invalid unless assigned by a later AY registry version. Private AY-like
+engines use a private `chip_type_id`.
 
 ### A.4 Registry status
 

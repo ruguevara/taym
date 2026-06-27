@@ -170,12 +170,6 @@ def _target_name(t: Taym, chip_index: int, tid: int) -> str:
     if chip_index < len(t.chips) and t.chips[chip_index].chip_type_id == spec.CHIP_TYPE_AY:
         if tid in _AY_REG:
             return _AY_REG[tid]
-    if tid == spec.TGT_SAMPLE_AMPLITUDE:
-        return "SAMP_AMP"
-    if tid == spec.TGT_SAMPLE_INDEX:
-        return "SAMP_IDX"
-    if tid == spec.TGT_SAMPLE_RATE:
-        return "SAMP_RATE"
     return f"0x{tid:02X}"
 
 
