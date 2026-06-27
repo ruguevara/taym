@@ -26,7 +26,7 @@ $(TEST_BIN): tests/test_roundtrip.c $(LIB) include/taym/taym.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ tests/test_roundtrip.c $(LIB)
 
 $(SAMPLE): | $(BUILD_DIR)
-	cd ../python && $(PYTHON) -m taym sample ../c/$(SAMPLE)
+	cd ../python && PYTHONPATH=src $(PYTHON) -m taym sample ../c/$(SAMPLE)
 
 test: $(TEST_BIN) $(SAMPLE)
 	$(TEST_BIN) $(SAMPLE)
