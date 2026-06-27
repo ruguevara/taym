@@ -11,7 +11,9 @@ targets any retro music chip (SID, OPL, SN76489, etc.) where timer-trick
 techniques apply.
 
 This repository holds the **format specification** and **reference
-implementations** of it.
+implementations** of it. Start with the
+[overview](docs/TAYM-overview.md) for the mental model, then the
+[normative spec (draft 0.1)](docs/TAYM-format-draft-0.1.md).
 
 ## Layout
 
@@ -21,8 +23,9 @@ python/      Python reference reader/writer/validator + AY reference renderer
 c/           C reference reader/writer  (planned)
 ```
 
-- **`docs/TAYM-format-draft-0.1.md`** — the normative spec (draft 0.1).
-  `TAYM-overview.md` is the informal tour; read it first.
+- **[`docs/TAYM-format-draft-0.1.md`](docs/TAYM-format-draft-0.1.md)** — the
+  normative spec (draft 0.1). [`docs/TAYM-overview.md`](docs/TAYM-overview.md)
+  is the informal tour; read it first.
 - **`python/`** — the `taym` package: codec, strict spec-section-14 validator,
   stats, dumps, and an offline AY reference renderer (`taym.engine`, the audio
   oracle). `pip install taym`. See `python/README.md`.
