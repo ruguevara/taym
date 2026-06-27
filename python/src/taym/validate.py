@@ -71,6 +71,13 @@ def _chips(t: Taym, p):
     for i, c in enumerate(t.chips):
         if c.chip_type_id == spec.CHIP_TYPE_INVALID:
             p.append(f"S6: CHIP[{i}] chip_type_id 0x00 is invalid")
+        # Only AY (0x01) is fully defined in draft 0.1 (A.4); other standardized
+        # ids are named but carry no registry yet, so a producer must not emit
+        # them. Private ids (0x80..0xFF) ride a private contract, not validated.
+        lo, hi = spec.CHIP_TYPE_STD_RANGE
+        if lo <= c.chip_type_id <= hi and c.chip_type_id != spec.CHIP_TYPE_AY:
+            p.append(f"A.4: CHIP[{i}] standardized chip_type_id "
+                     f"0x{c.chip_type_id:02X} is undefined in draft 0.1")
         if c.chip_type_id == spec.CHIP_TYPE_AY and c.variant not in (spec.AY_VARIANT_AY, spec.AY_VARIANT_YM):
             p.append(f"A.1: CHIP[{i}] AY variant {c.variant} undefined (0=AY, 1=YM)")
         if c.chip_type_id == spec.CHIP_TYPE_AY:
