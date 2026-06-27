@@ -159,17 +159,15 @@ def _actions(t: Taym, p):
 
 
 def _ay_target_ok(tid: int) -> bool:
-    # Appendix A.2: R0..R13 hardware; 0x0E..0x7F invalid; format-virtual 0x80..0x82;
-    # engine 0xC0..0xFF reserved (allowed, engine-defined).
+    # Appendix A.2/A.3: R0..R13 hardware and format-virtual 0x80..0x82 only.
+    # All other AY targets are invalid until a later AY registry assigns them.
     if tid <= spec.AY_TARGET_MAX:
         return True
     if spec.TGT_HW_RANGE[0] <= tid <= spec.TGT_HW_RANGE[1]:
         return False  # 0x0E..0x7F unassigned
     if tid in spec.TGT_FMT_VIRTUAL_DEFINED:
         return True
-    if spec.TGT_FMT_VIRTUAL_RANGE[0] <= tid <= spec.TGT_FMT_VIRTUAL_RANGE[1]:
-        return False  # 0x83..0xBF reserved
-    return spec.TGT_ENGINE_RANGE[0] <= tid <= spec.TGT_ENGINE_RANGE[1]
+    return False
 
 
 # --- MODS state machine (S12, S13) ---------------------------------------
@@ -182,6 +180,8 @@ def _mods(t: Taym, p):
     # Per-timer active state, replayed frame by frame to enforce S12/S13.
     # active[timer] = None | "active" | "quiescent"; targets per chip for ownership.
     active = [None] * nt
+    active_base = [0] * nt
+    active_tlan_ref = [None] * nt
 
     def slice_targets(rec):
         return t.actions[rec.first_action:rec.first_action + rec.action_count]
@@ -200,6 +200,10 @@ def _mods(t: Taym, p):
             if cmd == spec.CMD_START:
                 _check_start(t, rec, frame, ti, p)
                 active[ti] = "active"
+                active_base[ti] = rec.base_timer_value
+                active_tlan_ref[ti] = _valid_tlan_ref(t, rec.timer_lane_ref)
+                _check_abs_relative_rate(t, ti, active_base[ti],
+                                         active_tlan_ref[ti], frame, p)
                 chip = t.timers[ti].chip_index
                 for a in slice_targets(rec):
                     key = (chip, a.target_id)
@@ -216,8 +220,20 @@ def _mods(t: Taym, p):
                     p.append(f"S12: MODS frame {frame} timer {ti} timer_lane_ref "
                              f"{rec.timer_lane_ref} out of TLAN range")
                 _check_actions_slice(t, rec, frame, ti, p)
+                if active[ti] == "active":
+                    base = rec.base_timer_value or active_base[ti]
+                    tlan_ref = active_tlan_ref[ti]
+                    if rec.timer_lane_ref == spec.TLAN_NONE:
+                        tlan_ref = None
+                    elif rec.timer_lane_ref != spec.TLAN_UNCHANGED:
+                        tlan_ref = _valid_tlan_ref(t, rec.timer_lane_ref)
+                    _check_abs_relative_rate(t, ti, base, tlan_ref, frame, p)
+                    active_base[ti] = base
+                    active_tlan_ref[ti] = tlan_ref
             elif cmd == spec.CMD_STOP:
                 active[ti] = None
+                active_base[ti] = 0
+                active_tlan_ref[ti] = None
             # EMPTY: no state change.
 
     # loop_frame reconstruction (S4): every timer at loop_frame is START or STOP.
@@ -240,6 +256,32 @@ def _check_start(t: Taym, rec, frame, ti, p):
     if rec.action_count < 1:
         p.append(f"S12.2: MODS frame {frame} timer {ti} START with no actions")
     _check_actions_slice(t, rec, frame, ti, p)
+
+
+def _valid_tlan_ref(t: Taym, ref: int):
+    if ref == spec.TLAN_NONE or ref == spec.TLAN_UNCHANGED:
+        return None
+    if 0 <= ref < len(t.tlanes):
+        return ref
+    return None
+
+
+def _check_abs_relative_rate(t: Taym, ti: int, base: int, tlan_ref, frame: int, p):
+    if ti >= len(t.timers) or t.timers[ti].clock_mode != spec.CLOCK_ABS_RATE_HZ:
+        return
+    if tlan_ref is None or tlan_ref >= len(t.tlanes) or base == 0:
+        return
+    lane = t.tlanes[tlan_ref]
+    if lane.timing_mode != spec.TM_RELATIVE:
+        return
+    if lane.value_offset + lane.length > len(t.vu32):
+        return
+    for value_index in range(lane.value_offset, lane.value_offset + lane.length):
+        multiplier = t.vu32[value_index]
+        if not spec.fix16_product_fits(base, multiplier):
+            p.append(f"S10/S14: MODS frame {frame} timer {ti} ABS_RATE_HZ "
+                     "relative timer lane effective rate exceeds unsigned 16.16")
+            return
 
 
 def _check_actions_slice(t: Taym, rec, frame, ti, p):

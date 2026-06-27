@@ -145,7 +145,7 @@ def ay_stereo_layout(config: int) -> int:
 # target_id ranges (S11)
 TGT_HW_RANGE = (0x00, 0x7F)         # real chip registers
 TGT_FMT_VIRTUAL_RANGE = (0x80, 0xBF)
-TGT_ENGINE_RANGE = (0xC0, 0xFF)     # chip/engine-private
+TGT_ENGINE_RANGE = (0xC0, 0xFF)     # registry-assigned, or private chip type
 # format-specified virtual targets (chip-independent)
 TGT_SAMPLE_AMPLITUDE = 0x80
 TGT_SAMPLE_INDEX = 0x81
@@ -202,3 +202,9 @@ def from_fix16(encoded: int) -> float:
 def fits_fix16(value: float) -> bool:
     enc = to_fix16(value)
     return 0 <= enc <= FIX16_MAX
+
+
+def fix16_product_fits(lhs_encoded: int, rhs_encoded: int) -> bool:
+    """Whether two unsigned 16.16 values multiply to a representable 16.16."""
+    return 0 <= lhs_encoded and 0 <= rhs_encoded \
+        and lhs_encoded * rhs_encoded <= FIX16_MAX * FIX16_ONE

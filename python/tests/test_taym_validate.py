@@ -50,6 +50,11 @@ def test_chip_type_invalid():
     has(validate(m), "0x00 is invalid")
 
 
+def test_chip_type_undefined_standardized():
+    m = fresh(); m.chips[0].chip_type_id = 0x02
+    has(validate(m), "undefined in draft 0.1")
+
+
 def test_ay_stereo_layout_valid_roundtrips():
     m = fresh(); m.chips[0].config = spec.AY_LAYOUT_ACB
     assert validate(m) == []
@@ -170,6 +175,22 @@ def test_ay_reg_non_u8_lane():
 def test_ay_target_out_of_range():
     m = fresh(); m.actions[0].target_id = 0x40  # 0x0E..0x7F invalid for AY
     has(validate(m), "invalid for AY chip")
+
+
+def test_ay_engine_target_unassigned():
+    m = fresh(); m.actions[0].target_id = 0xC0
+    has(validate(m), "invalid for AY chip")
+
+
+def test_abs_relative_rate_over_ceiling():
+    m = fresh()
+    m.timers[0] = Timr(chip_index=0, clock_mode=spec.CLOCK_ABS_RATE_HZ,
+                       clock_divider=0)
+    m.tlanes[0] = Tlan(timing_mode=spec.TM_RELATIVE, value_offset=0,
+                       length=1, loop_index=0)
+    m.vu32 = [spec.to_fix16(2.0)]
+    m.mods[0].base_timer_value = spec.to_fix16(40000.0)
+    has(validate(m), "effective rate exceeds")
 
 
 def test_double_start_same_target():

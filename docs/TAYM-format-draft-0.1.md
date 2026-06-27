@@ -56,11 +56,9 @@ called out where used.
 | `command`     | `MODS.command` u8            | 0 EMPTY, 1 START, 2 MODULATE, 3 STOP (S12)          |
 
 `chip_type_id` (u8, section 6) and `target_id` (u8, section 11 hardware range)
-are not closed in this document: their value spaces are assigned by the separate
-chip and target registries (appendix A lists the AY assignments). A reader for a
-standardized chip rejects an unknown hardware `target_id`; an unknown
-`chip_type_id` in the private range is tolerated only by a consumer that
-recognizes it.
+are assigned by chip and target registries (appendix A defines AY). A reader for
+a standardized chip rejects an unknown `target_id`; private contracts use
+private `chip_type_id` values.
 
 ## 2. File header
 
@@ -83,9 +81,8 @@ header_size + chunk_bytes
 `chunk_bytes` is mandatory and nonzero. Reading to EOF is not an alternative.
 Trailing bytes are invalid. There is no file checksum.
 
-`chunk_bytes` is u32, so the chunk stream (and thus the file) is bounded just
-under 4 GiB. This is ample: a 4-minute 50 Hz 6-timer `MODS` is ~1.1 MB
-(section 12). The format does not target files larger than 4 GiB.
+`chunk_bytes` is u32, so the chunk stream is at most 4,294,967,295 bytes. The
+file extent is `header_size + chunk_bytes`.
 
 ## 3. Chunk container
 
@@ -133,8 +130,7 @@ Empty array and value-pool chunks remain present with a zero-sized payload.
 `TRAK` always contains one record. `CHIP`, `TIMR`, and `MODS` sizes follow the
 counts in `TRAK`.
 
-Some tags are reserved for possible future versions; see the future-work
-section. They are not defined in draft 0.1.
+Tags named in section 16 are reserved but not defined in draft 0.1.
 
 ### 3.1 Direct array and memory-mapped access
 
@@ -148,18 +144,6 @@ A reader may therefore:
 - memory-map the file and keep chunk payloads in place;
 - read a complete payload into an array of packed C structs; or
 - retain byte pointers and decode fields only when used.
-
-Zero-copy C struct access is valid only when:
-
-- the host is little-endian;
-- declarations are explicitly packed;
-- compile-time assertions verify every struct size;
-- the CPU/compiler safely supports the payload's potentially unaligned
-  address.
-
-Naturally aligned structs must not be cast over arbitrary chunk payloads.
-Big-endian or alignment-sensitive systems use little-endian load helpers, or
-copy/swap a chunk once. They still use the same flat arrays and indices.
 
 ## 4. Track timeline -- `TRAK`
 
@@ -185,20 +169,9 @@ When `loop_frame` is present:
 - playback jumps from the end of the track to `loop_frame`;
 - every timer's `MODS` record at `loop_frame` is `START` or `STOP`.
 
-This makes timer state at `loop_frame` independent of the previous iteration.
-In particular a *quiescent* timer (a no-loop timer lane that ran out, section
-10.2) carries running state that is not reconstructable on its own, which is
-exactly why `EMPTY`/`MODULATE` are forbidden at `loop_frame`: the `START`/`STOP`
-requirement re-establishes or releases that state explicitly.
-
-Background chip register state is a different matter. A frame-data stream
-(section 6.2) is coded in a platform-dependent way -- the embedded Bulba `.psg`
-is a delta/RLE stream with no native keyframe marker and no per-frame seek
-index -- so the format does not require a full-register frame at `loop_frame`.
-Reconstructing the full register state at the loop point is the
-*converter/consumer's* responsibility: it decodes the stream up to `loop_frame`
-once. A writer MAY emit `loop_frame` (and frame 0) as a full-register frame
-rather than only deltas to make seeking cheaper, but is not obliged to.
+This re-establishes timer state at loop entry. Frame-data streams need not
+keyframe `loop_frame`; consumers reconstruct background register state by
+decoding the stream up to that frame.
 
 ## 5. Optional metadata -- `INFO`
 
@@ -244,25 +217,12 @@ not a display title -- producers must not put UTF-8 there.
 The number of records equals `TRAK.chip_count`. Chip index is the record
 index.
 
-`clock_hz` is an integer because chip master clocks are integer crystals;
-`TRAK.frame_rate` is 16.16 because frame rates can be fractional (e.g. an
-NTSC-derived 59.94 Hz). The two encodings differ deliberately.
+`clock_hz` is an integer chip master clock. `name` is informational and may
+occupy all 16 bytes without a terminator.
 
-`name` is informational. It may occupy all 16 bytes without a terminator.
-
-`variant` selects between behaviorally close members of one `chip_type_id`
-that share the register registry but differ in rendering (e.g. AY vs YM DAC
-curve, A.1). `0` is the family default; a consumer that does not recognize a
-nonzero variant renders the default. The meaning of each value is defined per
-chip type in the registry, not here.
-
-`config` is a per-instance configuration bitfield whose layout is defined per
-`chip_type_id` in the registry -- it carries chip-specific playback settings
-that are not chip registers and not in the frame stream (for AY, the stereo
-channel layout; A.1). `0` is the family default. Each chip type owns its own
-bits; bits a type does not define are reserved zero. A consumer that does not
-recognize a field renders the family default. (Provisioned for e.g. a SID
-filter-model nuance or an SN76489 noise-tap variant in later drafts.)
+`variant` selects registry-defined behavior within one `chip_type_id`; `0` is
+the family default. `config` is a registry-defined per-instance bitfield; bits
+a chip type does not define are reserved zero.
 
 Chip type ID ranges:
 
@@ -272,12 +232,8 @@ Chip type ID ranges:
 0x80..0xFF  private/experimental chip types
 ```
 
-The standardized chip registry is separate from this document.
-Behaviorally distinct chips receive distinct IDs. Draft 0.1 fixes one entry,
-the AY family, in appendix A.
-
-There are no schema references in draft 0.1. Future chip schemas may be
-carried by independent extension chunks.
+The standardized range is registry-assigned, not open-ended. Draft 0.1 fixes
+one standardized entry, the AY family, in appendix A.
 
 Multiple chip instances may use the same type ID. Turbo Sound, for example,
 uses two AY records. Timers refer to the chip-instance index.
@@ -325,13 +281,9 @@ matching is case-sensitive where the host filesystem is.
 The Bulba stream preserves the register writes present in each frame,
 including write-sensitive repeated writes represented by the source.
 
-Embedding an unmodified `.psg` reuses a well-understood stream and preserves
-write-sensitive repeats exactly. The cost is that a consumer must bundle a PSG
-decoder, and the stream carries no keyframes, which complicates random seek and
-loop reconstruction (section 4). A future chip-independent register-delta
-frame-data chunk (per-frame deltas with periodic full keyframes and a frame
-index, not tied to the AY) would make seeking and looping self-contained; see
-the future-work section.
+Embedding an unmodified `.psg` preserves write-sensitive repeated writes. The
+stream has no keyframes, so consumers decode linearly to seek or reconstruct a
+loop point.
 
 Other chip-specific frame-data payloads are outside draft 0.1.
 
@@ -443,13 +395,11 @@ A one-shot sample may end with an explicit zero and use no loop.
 
 ## 10. Timer lanes -- `TLAN`
 
-Timer lanes are a separate descriptor table from value lanes (`LANE`) because
-they carry timing semantics value lanes do not: a timing mode, coupling to the
-owning timer's clock mode, a fixed `VU32` pool, and quiescence on a no-loop
-final element (section 10.2). Keeping them separate avoids a meaningless
-timing-mode field on every value lane and keeps validation honest about which
-lanes may be timer-bound. A `LANE` of type `U32` and a `TLAN` descriptor may
-read from the same `VU32` pool; each descriptor carries its own slice.
+Timer lanes are separate from value lanes (`LANE`) because they carry timing
+semantics: timing mode, coupling to the owning timer's clock mode, a fixed
+`VU32` pool, and no-loop quiescence (section 10.2). A `LANE` of type `U32` and
+a `TLAN` descriptor may read from the same `VU32` pool; each descriptor carries
+its own slice.
 
 `TLAN` is an array of 16-byte descriptors over `VU32`:
 
@@ -481,11 +431,8 @@ For a `CHIP_PERIOD` timer, the base rate is first derived from the stored
 period and chip clock. The multiplier does not directly multiply the encoded
 period.
 
-The 16.16 ceiling (section 7) bounds the *encoded* multiplier, not the product.
-`effective_rate` is a derived quantity, never re-encoded as 16.16, so only its
-realizability on the target matters -- a multiplier that pushes the effective
-rate above the ABS_RATE_HZ ceiling is well-formed, and the conversion clamps or
-approximates per the target's capability (section 12.3).
+For an `ABS_RATE_HZ` timer, `effective_rate` must fit unsigned 16.16 Hz. Higher
+effective rates require `CHIP_PERIOD`.
 
 The persistent base and timer lane compose as:
 
@@ -528,9 +475,7 @@ quiescent. The final boundary performs no lane advance and no target write.
 The timer retains ownership and final target values but generates no more
 expiries. Quiescent is not stopped: a `STOP` is still required to release
 ownership. `MODULATE` is invalid while quiescent. Only `START` or `STOP` may
-follow. This cleanly separates "stop emitting" (a finite lane ending) from
-"release the target" (`STOP`), which is the model for one-shot samples and
-finite envelope bursts.
+follow.
 
 Looping on the final timer element explicitly means to continue indefinitely
 using that interval.
@@ -572,8 +517,9 @@ Target IDs are chip-local. The 8-bit space is split:
               0x81  sample index
               0x82  sample rate
               0x83..0xBF  reserved for future format-specified virtual targets
-0xC0..0xFF  engine-interpreted      chip/engine-private virtual targets;
-                                    meaning defined by the chip type
+0xC0..0xFF  engine-interpreted      assigned by the chip registry, or by a
+                                    private chip type's producer/consumer
+                                    contract
 ```
 
 A virtual target is not a hardware register; it modulates an engine-level
@@ -581,14 +527,14 @@ parameter the frame-data stream cannot reach. This is what lets a sample's
 amplitude, index, or rate be driven by a lane independently of its sample data.
 
 The hardware range is standardized per chip type by the separate target
-registry (the AY assignments are in appendix A). The format-specified virtual range has a fixed, chip-independent
-meaning (`0x80..0x82` defined here; `0x83..0xBF` reserved -- invalid until a
-later version assigns them). The engine-interpreted range is defined by each
-chip type for its own engine.
+registry (the AY assignments are in appendix A). The format-specified virtual
+range has a fixed, chip-independent meaning (`0x80..0x82` defined here;
+`0x83..0xBF` reserved -- invalid until a later version assigns them). The
+engine-interpreted range is valid only when assigned by the chip registry, or
+when used with a private chip type.
 
 Unknown target IDs are invalid for a standardized chip. There is no
-producer-private target-ID range; private chip types define their own
-producer/consumer contract over the engine-interpreted range.
+producer-private target-ID range for standardized chip types.
 
 Within every referenced action slice:
 
@@ -615,12 +561,8 @@ Each (timer, frame) has exactly one record, so a timer carries exactly one
 command per frame. There is no within-frame command ambiguity for a single
 timer; the same-frame ordering in section 13.2 is only across timers.
 
-The fixed array is mostly `EMPTY` records and can be large (e.g. a 4-minute
-50 Hz track with 6 timers is about 1.1 MB). It is kept as the canonical form
-because it gives O(1) random access to any (timer, frame) with no
-decompression -- the point of the design. A future optional compressed
-encoding of the same records is discussed in the future-work section; it is
-not defined in draft 0.1.
+The fixed array is the canonical form because it gives O(1) random access to
+any (timer, frame) with no decompression.
 
 Each record is 16 bytes:
 
@@ -730,17 +672,8 @@ When a timer lane is installed where none was active, element 0 defines the
 current interval immediately. Replacing an active timer lane makes the new
 lane's value at the preserved index the requested current interval.
 
-The handling of an interval already in progress is target-dependent:
-
-- DDS/free-running targets may preserve normalized phase and retime
-  immediately;
-- programmable timers may replace the current counter or reload;
-- simple countdown timers may finish the old interval;
-- constrained targets may latch the change at the next loop boundary.
-
-All are valid conversions. `MODULATE` must not be treated as `START`. The
-invariant an exporter may rely on is that `MODULATE` preserves logical lane
-phase (the running index) and never retriggers; only the *realized* hardware
+Handling of an interval already in progress is target-dependent. `MODULATE`
+preserves logical lane phase and must not retrigger; only the realized hardware
 interval boundary is target-defined.
 
 A `MODULATE` that changes nothing is non-canonical and writers should emit
@@ -818,6 +751,7 @@ A draft-0.1 validator rejects at least:
 - zero frame rate/count or an invalid loop frame;
 - a nonzero reserved field;
 - an unsupported enum or scalar type;
+- an undefined standardized `chip_type_id`;
 - an out-of-range chip, action, target, lane, timer-lane, or pool reference (a
   `timer_lane_ref` of `0xFFFFFFFE`/`0xFFFFFFFF` is an operation, not an index);
 - a zero-length lane;
@@ -825,6 +759,8 @@ A draft-0.1 validator rejects at least:
 - an invalid clock-mode/divider combination;
 - a `CHIP_PERIOD` timer whose referenced chip has a zero `clock_hz`;
 - an `ABS_RATE_HZ` base or absolute lane value that does not fit unsigned 16.16;
+- an `ABS_RATE_HZ` relative timer lane whose effective rate does not fit
+  unsigned 16.16;
 - a zero active base, rate, period, or relative multiplier;
 - an absolute timer lane shared across different clock modes;
 - a `START` with no target actions, or a `START` whose `timer_lane_ref` is
@@ -859,41 +795,7 @@ Replacing the timer lane with `[30, 60]` through `MODULATE` preserves its
 logical index. A DDS converter may retime immediately; a basic hardware timer
 may finish the old interval.
 
-### 15.2 Fixed-value R13 retrigger
-
-```text
-target R13: INLINE_VALUE shape
-timer: constant base interval
-```
-
-`START` writes the shape. Every expiry writes it again, retriggering the
-envelope. No one-element lane is required.
-
-### 15.3 One-shot sample
-
-```text
-value lane: [...sample codes..., 0], no loop
-timer: constant base interval
-```
-
-The final zero is written once. The lane then becomes dormant and does not
-rewrite zero.
-
-### 15.4 Finite burst
-
-```text
-value lane: [A, B, A], no loop
-timer lane: [20, 30, 20], no loop
-```
-
-```text
-START    write A, wait 20
-expiry   write B, wait 30
-expiry   write A, wait 20
-end      become quiescent; no extra write
-```
-
-### 15.5 Turbo Sound
+### 15.2 Turbo Sound
 
 ```text
 CHIP[0] = { chip_type_id=0x01, name="AY-A", frame_data_tag="PSG0" }
@@ -907,14 +809,13 @@ anywhere in the file, or resolve to `song.PSG0.psg` and `song.PSG1.psg`.
 
 The chip and target registries are external to the format body (sections 6 and
 11), but draft 0.1 fixes one concrete chip so that producers and consumers can
-interoperate without a second document. This appendix is that registry entry,
-and A.1 also lists the standardized chip-type IDs assigned so far.
+interoperate without a second document. This appendix is that registry entry.
 
 ### A.1 Chip type
 
 Standardized `chip_type_id` values (u8). `0x01` is fully defined by this
-appendix (A.2/A.3); the rest are assigned names whose target registries arrive
-in later drafts. Experiments use the private range (`0x80..0xFF`).
+appendix (A.2/A.3); the rest are assigned reserved names whose target registries
+arrive in later drafts. Experiments use the private range (`0x80..0xFF`).
 
 ```text
 PSG family
@@ -954,10 +855,8 @@ variant = 0   AY   AY-3-8910 / AY-3-8912 DAC curve (family default)
 variant = 1   YM   YM2149 DAC curve
 ```
 
-A consumer with no YM curve renders variant 1 as AY. `CHIP.clock_hz` and
-`CHIP.name` further describe the instance but are not required to select the
-curve. Turbo Sound is two `CHIP` records with this same ID (section 6, example
-15.5).
+A consumer with no YM curve renders variant 1 as AY. Turbo Sound is two `CHIP`
+records with this same ID (section 6, example 15.2).
 
 For `chip_type_id` == 0x01 the `CHIP.config` u32 (section 6) is laid out as:
 
@@ -1009,58 +908,31 @@ All are write targets.
 ```
 
 The hardware range is not producer-extensible: `0x0E..0x7F` are invalid for a
-standardized AY chip, not a private scratch area (section 11). A private AY-like
-engine that needs extra modulation targets uses the engine-interpreted range
-(A.3, `0xC0..0xFF`), not unassigned hardware IDs.
+standardized AY chip, not a private scratch area (section 11).
 
 `target_id == 0x0D` (R13) is write-sensitive: every write retriggers the
-envelope. This is the `INLINE_VALUE` retrigger case of example 15.2 and the
-write-sensitive concern behind no-loop lane dormancy (section 9.1).
+envelope. This is the write-sensitive concern behind no-loop lane dormancy
+(section 9.1).
 
 R14/R15 (the AY I/O port data registers) are not sound registers and have no
 target ID; they are not addressable by timers.
 
 ### A.3 Virtual targets (`target_id` 0x80..0xFF)
 
-This covers both virtual sub-ranges of section 11 as they apply to AY:
-
-- the format-specified virtual range (`0x80..0x82`, section 11) applies to AY
-  sample-playback engines unchanged; `0x83..0xBF` are reserved (invalid);
-- the engine-interpreted range `0xC0..0xFF` is reserved for AY synthesis engines
-  (e.g. software duty/DDS buzzers) and is defined by each such engine's
-  producer/consumer contract, not by this appendix.
-
-Draft 0.1 assigns no AY-specific engine-interpreted targets in `0xC0..0xFF`.
+For `chip_type_id == 0x01`, draft 0.1 assigns only `0x80..0x82` from section
+11. `0x83..0xFF` are invalid unless assigned by a later AY registry version.
+Private AY-like engines use a private `chip_type_id`.
 
 ### A.4 Registry status
 
-Of the standardized IDs in A.1, only `0x01` (AY) is fully defined by draft 0.1
-(A.2/A.3). The others carry an assigned name but no target registry, no variant
-meaning, and no consumer obligation yet. A producer must not emit them until a
-later draft assigns their registries. Experiments use the private range
-(`0x80..0xFF`).
+No other standardized chip type is defined by draft 0.1. Experiments use the
+private range (`0x80..0xFF`).
 
 ## 16. Future work (not part of draft 0.1)
 
-These are candidate directions, not commitments. They are recorded so that
-their chunk tags are not reused by private extensions. Nothing here is defined
-or required by draft 0.1.
+These reserved tags are not defined or required by draft 0.1:
 
-### 16.1 Chip-independent register-delta frame data
-
-The embedded Bulba `.psg` (section 6.2) is AY-specific and carries no keyframes,
-so a consumer must bundle a PSG decoder and decode linearly to reach an
-arbitrary frame. A future chip-independent frame-data chunk could store
-per-frame register deltas with periodic full-register keyframes and a frame
-index, making random seek and loop reconstruction self-contained for any
-register chip. Candidate tags `REG0`, `REG1`... or `DMP0`, `DMP1`... (one per
-chip instance, like `PSG0`) are reserved for this.
-
-### 16.2 Compressed `MODS`
-
-The fixed `MODS` array (section 12) is mostly `EMPTY` records. A future optional
-chunk could carry a sparse or RLE encoding of the same records, from which
-`MODS` is reconstructable, for size-sensitive producers; a reader that does not
-understand it would fall back to `MODS`. Whether this belongs in the format at
-all, versus leaving compression to the container/transport, is open for
-discussion.
+```text
+REG0, REG1...  chip-independent register-delta frame data candidates
+DMP0, DMP1...  alternate register-delta frame data candidates
+```

@@ -26,6 +26,9 @@ def _chip_type_name(type_id: int) -> str:
     name = _CHIP_TYPE_NAME.get(type_id)
     if name:
         return name + (" (registry TBD)" if type_id in spec.CHIP_TYPE_REGISTRY else "")
+    lo, hi = spec.CHIP_TYPE_STD_RANGE
+    if lo <= type_id <= hi:
+        return "undefined standardized"
     lo, hi = spec.CHIP_TYPE_PRIVATE_RANGE
     return "private" if lo <= type_id <= hi else "?"
 
