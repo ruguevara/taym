@@ -1,11 +1,12 @@
-# TAYM — Timer-tricks AY-3-8910 Music
+# TAYM interchange format
 
 A chip-oriented *interchange* format for music with timer tricks. Trackers and
 synthesis tools export TAYM; platform-specific converters turn it into their own
 runtime formats for retrocomputer platforms. This format is not intended for
 direct multiplatform playback.
 
-The format is chip-agnostic: although the name references the AY-3-8910, TAYM
+The format is chip-agnostic: although the name references the AY-3-8910
+(TAYM is acronym for "Timer-tricks AY Music", spelled as "time"), the format
 targets any retro music chip (SID, OPL, SN76489, etc.) where timer-trick
 techniques apply.
 
