@@ -24,9 +24,12 @@ stream + timers"):
    background for them, firing *between* frames (much faster than 50 Hz) to do
    PWM, duty sweeps, envelope retriggers. Fast movement.
 
-Out of scope: the format-virtual range (`0x80..0xBF`, reserved in draft 0.1),
-multi-chip mixing beyond "last writer wins" (the validator forbids the
-conflicting case anyway).
+The `0x80` sample-amplitude virtual target is modeled via the AY/YM DAC combine
+(spec S11.1): its paired amp reg R8/9/10 supplies the volume, and the engine
+quantizes `delog(volume) * amplitude` once through the chip's 16-step DAC curve.
+
+Out of scope: multi-chip mixing beyond "last writer wins" (the validator
+forbids the conflicting case anyway).
 
 ## The render loop
 

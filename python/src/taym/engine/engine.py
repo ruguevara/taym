@@ -15,9 +15,10 @@ single AY chip:
 
 Scope: the subset the converters emit (one active timer per chip is the common
 case; multiple are rendered independently and the last writer to a shared
-target wins within a frame, which the validator already forbids). The
-format-virtual range (0x80..0xBF) is reserved in draft 0.1 and not modeled --
-this is an AY-register oracle.
+target wins within a frame, which the validator already forbids). The 0x80
+sample-amplitude virtual target is modeled via the AY/YM DAC combine (S11.1):
+its paired amp reg R8/9/10 is the volume, and the engine quantizes the product
+once through the chip DAC curve. Otherwise this is an AY-register oracle.
 """
 from __future__ import annotations
 
@@ -61,6 +62,53 @@ class _TimerState:
 def _lane_values(t: Taym, lane):
     pool = t.pool_for(lane.value_type)
     return pool[lane.value_offset:lane.value_offset + lane.length]
+
+
+# AY/YM 16-step log volume DAC curves, used only by the 0x80 sample-amplitude
+# combine (S11.1, appendix A.3): delog a volume R-code to linear, scale by the
+# unquantized amplitude, requantize to the nearest code -- one quantization at
+# the DAC boundary, instead of scaling an already-quantized log code. This is
+# the one place the oracle models the DAC nonlinearity; the ordinary register
+# path does not (Ayumi applies its own curve internally).
+#
+# Both AY and YM pick the *volume* level from a 16-step (4-bit) curve via the
+# low bits of R8/9/10. The two curves differ slightly (YM closer to a true
+# exponential). The YM 32-step (5-bit) table is the *envelope* curve, not the
+# volume R-code, so it is not used here. Selected by variant (A.1).
+_AY_DAC = (
+    0.0, 0.0137241, 0.0204537, 0.0297982, 0.0436433, 0.0617359, 0.0852263,
+    0.124784, 0.174999, 0.249394, 0.330180, 0.466867, 0.605485, 0.829825,
+    1.0, 1.0,
+)
+_YM_DAC = (
+    0.0, 0.00772106507973, 0.0109559777218, 0.0169985503929, 0.0243891524475,
+    0.0349712417832, 0.0477244022087, 0.0688094166194, 0.0925147863484,
+    0.129109300148, 0.171346846100, 0.236550629699, 0.330481199642,
+    0.477244022087, 0.645160767670, 1.0,
+)
+
+
+def _dac_table(variant: int):
+    return _YM_DAC if variant == spec.AY_VARIANT_YM else _AY_DAC
+
+
+def _amp_full_scale(value_type: int) -> int:
+    return {spec.VT_U8: 0xFF, spec.VT_U16: 0xFFFF, spec.VT_U32: 0xFFFFFFFF}.get(
+        value_type, 0xFF)
+
+
+def _combine_amp_code(table, volume_code: int, amplitude: int, full_scale: int) -> int:
+    """S11.1: volume R-code x unquantized linear amplitude -> nearest R-code.
+
+    delog the 4-bit volume code via the chip's 16-step DAC `table`, multiply by
+    amplitude/full_scale (both linear), requantize to the closest code."""
+    lin = table[volume_code & 0x0F] * (amplitude / full_scale if full_scale else 0.0)
+    best, bestd = 0, abs(table[0] - lin)
+    for c in range(16):
+        d = abs(table[c] - lin)
+        if d <= bestd:            # ties prefer the higher code (table top repeats)
+            best, bestd = c, d
+    return best
 
 
 def _advance(idx: int, lane) -> int:
@@ -177,6 +225,7 @@ def _render(taym, sample_rate: int, chip_index: int, stereo: bool, remove_dc: bo
     fps = t.trak.frame_rate_hz
     spf = max(1, round(sample_rate / fps))
     chip_type = ChipType.YM if chip.variant == spec.AY_VARIANT_YM else ChipType.AY
+    dac = _dac_table(chip.variant)   # S11.1 sample-amplitude combine curve
     ay = Ayumi(sample_rate=sample_rate, clock=chip.clock_hz or 1773400, type=chip_type)
     # Stereo: pan A/B/C per CHIP.config layout (A.1). Mono: all center, so the
     # (L+R)/2 mix is layout-independent and bit-exact.
@@ -257,7 +306,7 @@ def _render(taym, sample_rate: int, chip_index: int, stereo: bool, remove_dc: bo
             for ti in active:
                 st = states[ti]
                 if st.samples_to_expiry <= 0.0:
-                    _expiry(t, ay, regs, ti, st, owned)
+                    _expiry(t, ay, regs, ti, st, owned, dac)
                     rate = _timer_rate_hz(t, t.timers[ti], st)
                     st.samples_to_expiry += max(1.0, sample_rate / rate) if rate > 0 else spf
             # render up to the nearest upcoming expiry or the frame end.
@@ -316,6 +365,28 @@ def _apply_command(t: Taym, ti: int, st: _TimerState, m):
         elif m.timer_lane_ref != spec.TLAN_UNCHANGED:
             new = t.tlanes[m.timer_lane_ref]
             st.tlan = new  # phase preserved: keep tlan_idx (validator checks shape)
+        # S12.3: named actions replace sources only for already-owned targets
+        # (cannot add/remove). No write happens now; the change is visible at the
+        # next expiry. Phase rule depends on what the source was vs. becomes.
+        for a in t.actions[m.first_action:m.first_action + m.action_count]:
+            for i, (tid, old_lane, _old_inline) in enumerate(st.targets):
+                if tid != a.target_id:
+                    continue
+                if a.source_mode == spec.SRC_BIND_LANE:
+                    new_lane = t.lanes[a.operand]
+                    if old_lane is None:
+                        # lane replaces inline: start at 0, element 0 pending --
+                        # written at next expiry without advancing first.
+                        st.lane_idx[tid] = 0
+                        st.pending.add(tid)
+                    # lane replaces active lane: preserve index, advance normally
+                    # (validator checks identical length/loop_index). No pending.
+                    st.targets[i] = (tid, new_lane, 0)
+                else:
+                    # inline replaces any source: a constant, written each expiry.
+                    st.targets[i] = (tid, None, a.operand)
+                    st.pending.discard(tid)
+                break
 
 
 def _push_regs_delta(ay, regs, owned, shadow):
@@ -340,7 +411,7 @@ def _push_regs_delta(ay, regs, owned, shadow):
         ay.set_registers(idxs, vals)
 
 
-def _expiry(t: Taym, ay, regs, ti, st, owned):
+def _expiry(t: Taym, ay, regs, ti, st, owned, dac):
     """One atomic timer expiry (S10.1, S13): advance lanes (unless armed = the
     immediate post-START expiry), then write owned targets. The timer lane
     advances with the value lanes; the new interval is loaded by the caller
@@ -349,15 +420,35 @@ def _expiry(t: Taym, ay, regs, ti, st, owned):
         st.armed = False                 # this expiry writes element 0 as-is
     else:
         for (tid, lane, _inline) in st.targets:
-            if lane is not None:
+            if lane is None:
+                continue
+            if tid in st.pending:
+                st.pending.discard(tid)  # S12.3: write element 0 without advancing
+            else:
                 st.lane_idx[tid] = _advance(st.lane_idx[tid], lane)
         if st.tlan is not None:
             st.tlan_idx = _advance(st.tlan_idx, st.tlan)
+    # S11.1: if this timer drives sample amplitude (0x80), grab its unquantized
+    # value at full lane/inline width so the paired amp reg's write can combine.
+    amp_full = None
     for (tid, lane, inline) in st.targets:
+        if tid != spec.TGT_SAMPLE_AMPLITUDE:
+            continue
+        if lane is not None:
+            amp_full = (_lane_values(t, lane)[st.lane_idx[tid]],
+                        _amp_full_scale(lane.value_type))
+        else:
+            amp_full = (inline, 0xFF)   # inline operand is byte-wide
+    for (tid, lane, inline) in st.targets:
+        if tid == spec.TGT_SAMPLE_AMPLITUDE:
+            continue  # virtual: emitted via its paired amp reg, never to a reg
         if owned.get(tid) != ti:
             continue  # another timer owns it this frame (handoff edge)
         v = (_lane_values(t, lane)[st.lane_idx[tid]] if lane is not None else inline) & 0xFF
         if tid == spec.AY_R13_SHAPE:
             ay.set_envelope_shape(v & 0x0F)   # write retriggers
+        elif tid in spec.AY_AMP_REGS and amp_full is not None:
+            amplitude, fs = amp_full       # v is the volume code; combine once
+            ay.set_registers([tid], [_combine_amp_code(dac, v, amplitude, fs)])
         elif tid <= 13:
             ay.set_registers([tid], [v])

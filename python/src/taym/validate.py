@@ -150,7 +150,7 @@ def _tlanes(t: Taym, p):
 def _valid_target(tid: int) -> bool:
     lo, hi = spec.TGT_FMT_VIRTUAL_RANGE
     if lo <= tid <= hi:
-        return tid in spec.TGT_FMT_VIRTUAL_DEFINED  # 0x80..0xBF reserved -> invalid
+        return tid in spec.TGT_FMT_VIRTUAL_DEFINED  # 0x81..0xBF reserved -> invalid
     # hardware + engine ranges: openness depends on chip type; AY checks elsewhere.
     return True
 
@@ -166,9 +166,8 @@ def _actions(t: Taym, p):
 
 
 def _ay_target_ok(tid: int) -> bool:
-    # Appendix A.2/A.3: R0..R13 hardware only. No format-virtual target is
-    # defined in draft 0.1; all other AY targets are invalid until a later
-    # registry assigns them.
+    # Appendix A.2/A.3: R0..R13 hardware and format-virtual 0x80 only.
+    # All other AY targets are invalid until a later AY registry assigns them.
     if tid <= spec.AY_TARGET_MAX:
         return True
     if spec.TGT_HW_RANGE[0] <= tid <= spec.TGT_HW_RANGE[1]:
@@ -190,6 +189,7 @@ def _mods(t: Taym, p):
     active = [None] * nt
     active_base = [0] * nt
     active_tlan_ref = [None] * nt
+    active_targets = [frozenset() for _ in range(nt)]  # owned target_ids per timer (S12.3)
 
     def slice_targets(rec):
         return t.actions[rec.first_action:rec.first_action + rec.action_count]
@@ -219,6 +219,9 @@ def _mods(t: Taym, p):
                         p.append(f"S13.2: frame {frame} two STARTs claim chip "
                                  f"{chip} target 0x{a.target_id:02X}")
                     starts_this_frame[key] = ti
+                # START installs the complete owned target set (S12.2); MODULATE
+                # may later re-point only these, never add or remove (S12.3).
+                active_targets[ti] = frozenset(a.target_id for a in slice_targets(rec))
             elif cmd == spec.CMD_MODULATE:
                 if active[ti] != "active":
                     p.append(f"S12.3: MODS frame {frame} timer {ti} MODULATE on "
@@ -229,6 +232,13 @@ def _mods(t: Taym, p):
                              f"{rec.timer_lane_ref} out of TLAN range")
                 _check_actions_slice(t, rec, frame, ti, p)
                 if active[ti] == "active":
+                    # S12.3: MODULATE replaces sources only for already-owned
+                    # targets; it cannot add or remove (that needs START/STOP).
+                    for a in slice_targets(rec):
+                        if a.target_id not in active_targets[ti]:
+                            p.append(f"S12.3: MODS frame {frame} timer {ti} MODULATE "
+                                     f"names unowned target 0x{a.target_id:02X} "
+                                     "(cannot add targets)")
                     base = rec.base_timer_value or active_base[ti]
                     tlan_ref = active_tlan_ref[ti]
                     if rec.timer_lane_ref == spec.TLAN_NONE:
@@ -242,6 +252,7 @@ def _mods(t: Taym, p):
                 active[ti] = None
                 active_base[ti] = 0
                 active_tlan_ref[ti] = None
+                active_targets[ti] = frozenset()
             # EMPTY: no state change.
 
     # loop_frame reconstruction (S4): every timer at loop_frame is START or STOP.
@@ -320,6 +331,18 @@ def _check_actions_slice(t: Taym, rec, frame, ti, p):
                     and lane.value_type != spec.VT_U8:
                 p.append(f"S9/AppA: MODS frame {frame} timer {ti} AY reg "
                          f"0x{a.target_id:02X} bound to non-U8 lane")
+
+    # S11.1 sample amplitude: 0x80 is unquantized linear amplitude. Its volume
+    # and output is a paired AY amp reg -- the engine combines amplitude x
+    # volume and requantizes to the DAC code once. A slice with 0x80 must target
+    # exactly one of R8/R9/R10 (AY-specific by design).
+    if chip_type == spec.CHIP_TYPE_AY \
+            and any(a.target_id == spec.TGT_SAMPLE_AMPLITUDE for a in sl):
+        amp = [a.target_id for a in sl if a.target_id in spec.AY_AMP_REGS]
+        if len(amp) != 1:
+            p.append(f"S11.1: MODS frame {frame} timer {ti} sample amplitude "
+                     f"0x80 needs exactly one paired AY amp reg (R8/R9/R10), "
+                     f"got {len(amp)}")
 
 
 # --- frame data (S6.2) ----------------------------------------------------

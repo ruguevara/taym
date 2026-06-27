@@ -146,14 +146,18 @@ def ay_stereo_layout(config: int) -> int:
 TGT_HW_RANGE = (0x00, 0x7F)         # real chip registers
 TGT_FMT_VIRTUAL_RANGE = (0x80, 0xBF)
 TGT_ENGINE_RANGE = (0xC0, 0xFF)     # registry-assigned, or private chip type
-# format-specified virtual targets (chip-independent). None are defined in
-# draft 0.1: the whole 0x80..0xBF range is reserved -> invalid until a later
-# draft defines the sample/wavetable model (S11).
-TGT_FMT_VIRTUAL_DEFINED = ()  # 0x80..0xBF reserved -> invalid
+# format-specified virtual target (chip-independent). 0x80 carries the
+# *unquantized, linear* sample amplitude on a lane (U8 or U16 -- unit is
+# producer/platform chosen; the format defines only the semantics). Volume is
+# the paired AY amplitude register; the engine combines amplitude x volume and
+# requantizes to the chip DAC code once, at the DAC boundary (S11.1).
+TGT_SAMPLE_AMPLITUDE = 0x80
+TGT_FMT_VIRTUAL_DEFINED = (0x80,)    # 0x81..0xBF reserved -> invalid
 
 # AY hardware targets R0..R13 = 0x00..0x0D; 0x0E..0x7F unassigned/invalid (A.2)
 AY_TARGET_MAX = 0x0D
 AY_R13_SHAPE = 0x0D                  # write-sensitive: every write retriggers
+AY_AMP_REGS = (0x08, 0x09, 0x0A)     # R8/R9/R10: 0x80's volume + output reg (S11.1)
 
 # --------------------------------------------------------------------------
 # Record struct formats + strides. Each '<...' packs one record exactly.

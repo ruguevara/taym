@@ -280,6 +280,127 @@ def test_frame_count_matches_duration():
     assert abs(len(sig) - 25 * spf) <= spf, f"len {len(sig)} != ~{25*spf}"
 
 
+def _amp_taym(amp_value, frames=20):
+    """One timer: R8 volume (inline 0x0F) + 0x80 sample amplitude (inline).
+    A steady tone on A; the timer rewrites R8 via the DAC combine each expiry."""
+    from taym import spec
+    from taym.model import Actn, Chip, Mods, Taym, Timr, Tlan, Trak
+    tone = round(AY_CLOCK / (16 * 220.0))
+    regs = [tone & 0xFF, (tone >> 8) & 0x0F, 0, 0, 0, 0, 0,
+            0b111110, 0x0F, 0, 0, 0, 0, 0xFF]   # A on, R8 full volume
+    psg = _psg_steady(regs, frames)
+    rate = 2000.0
+    period = round(AY_CLOCK / (16 * rate))
+    return Taym(
+        trak=Trak(frame_rate_hz=FPS, frame_count=frames, loop_frame=spec.NO_LOOP),
+        chips=[Chip(clock_hz=AY_CLOCK, chip_type_id=spec.CHIP_TYPE_AY,
+                    name="AY", frame_data_tag="PSG0")],
+        timers=[Timr(chip_index=0, clock_mode=spec.CLOCK_CHIP_PERIOD, clock_divider=16)],
+        mods=[Mods(command=spec.CMD_START, base_timer_value=period, timer_lane_ref=0,
+                   first_action=0, action_count=2)]
+        + [Mods(command=spec.CMD_EMPTY) for _ in range(frames - 1)],
+        # slice sorted by target_id: R8 (0x08, volume) then 0x80 (amplitude).
+        actions=[Actn(target_id=0x08, source_mode=spec.SRC_INLINE_VALUE, operand=0x0F),
+                 Actn(target_id=spec.TGT_SAMPLE_AMPLITUDE,
+                      source_mode=spec.SRC_INLINE_VALUE, operand=amp_value)],
+        lanes=[], tlanes=[Tlan(timing_mode=spec.TM_ABSOLUTE, value_offset=0,
+                               length=1, loop_index=0)],
+        vu08=[], vu16=[], vu32=[period], frame_data={"PSG0": psg})
+
+
+def _amp_modulate_taym(vol_after, frames=40, at=20):
+    """As _amp_taym but a MODULATE at frame `at` re-points R8's inline volume to
+    `vol_after`. S12.3: MODULATE replaces the source of an already-owned target;
+    the new level becomes audible at the next expiry. 0x80 amplitude is a steady
+    inline full-scale so only the volume code changes."""
+    from taym import spec
+    from taym.model import Actn, Chip, Mods, Taym, Timr, Tlan, Trak
+    tone = round(AY_CLOCK / (16 * 220.0))
+    regs = [tone & 0xFF, (tone >> 8) & 0x0F, 0, 0, 0, 0, 0,
+            0b111110, 0x0F, 0, 0, 0, 0, 0xFF]
+    psg = _psg_steady(regs, frames)
+    rate = 2000.0
+    period = round(AY_CLOCK / (16 * rate))
+    mods = [Mods(command=spec.CMD_START, base_timer_value=period, timer_lane_ref=0,
+                 first_action=0, action_count=2)]
+    for f in range(1, frames):
+        if f == at:
+            # MODULATE: re-point R8 only (action slice [2:3]); keep timing/0x80.
+            mods.append(Mods(command=spec.CMD_MODULATE, base_timer_value=0,
+                             timer_lane_ref=spec.TLAN_UNCHANGED,
+                             first_action=2, action_count=1))
+        else:
+            mods.append(Mods(command=spec.CMD_EMPTY))
+    return Taym(
+        trak=Trak(frame_rate_hz=FPS, frame_count=frames, loop_frame=spec.NO_LOOP),
+        chips=[Chip(clock_hz=AY_CLOCK, chip_type_id=spec.CHIP_TYPE_AY,
+                    name="AY", frame_data_tag="PSG0")],
+        timers=[Timr(chip_index=0, clock_mode=spec.CLOCK_CHIP_PERIOD, clock_divider=16)],
+        mods=mods,
+        actions=[Actn(target_id=0x08, source_mode=spec.SRC_INLINE_VALUE, operand=0x0F),
+                 Actn(target_id=spec.TGT_SAMPLE_AMPLITUDE,
+                      source_mode=spec.SRC_INLINE_VALUE, operand=0xFF),
+                 # MODULATE target: R8 re-pointed to a new inline volume code.
+                 Actn(target_id=0x08, source_mode=spec.SRC_INLINE_VALUE, operand=vol_after)],
+        lanes=[], tlanes=[Tlan(timing_mode=spec.TM_ABSOLUTE, value_offset=0,
+                               length=1, loop_index=0)],
+        vu08=[], vu16=[], vu32=[period], frame_data={"PSG0": psg})
+
+
+def test_modulate_volume_changes_sample_level():
+    """A MODULATE that re-points the volume reg (R8) mid-tune must change the
+    rendered sample level: before the MODULATE the level matches the START code,
+    after it follows the new code (S12.3 'replace sources for owned targets')."""
+    if SKIP:
+        print("  (skipped)"); return
+    import numpy as np
+    from taym.engine import render
+    from taym import validate, write_taym
+    from taym import spec
+
+    at, frames = 20, 40
+    spf = round(SR / FPS)
+    split = at * spf
+
+    def halves(vol_after):
+        taym = _amp_modulate_taym(vol_after, frames=frames, at=at)
+        assert validate(taym) == []
+        sig = render(write_taym(taym), sample_rate=SR)
+        # leave a guard frame after the boundary for the new level to settle.
+        pre = sig[:split]
+        post = sig[split + spf:]
+        rms = lambda x: float(np.sqrt(np.mean(x ** 2)))
+        return rms(pre), rms(post)
+
+    # quieten: R8 0x0F -> 0x08, second half must drop.
+    pre_q, post_q = halves(0x08)
+    assert post_q < pre_q * 0.9, f"MODULATE-down did not lower level: {pre_q} {post_q}"
+    # control: re-point R8 back to 0x0F, halves stay comparable.
+    pre_c, post_c = halves(0x0F)
+    assert abs(post_c - pre_c) < pre_c * 0.1, f"no-op MODULATE changed level: {pre_c} {post_c}"
+
+
+def test_sample_amplitude_scales_output():
+    """0x80 amplitude must scale the paired R8's level through the DAC combine:
+    full amplitude is louder than a low amplitude, and zero is (near) silent."""
+    if SKIP:
+        print("  (skipped)"); return
+    import numpy as np
+    from taym.engine import render
+    from taym import validate, write_taym
+
+    def rms(taym):
+        assert validate(taym) == []           # pairing rule (S11.1) satisfied
+        sig = render(write_taym(taym), sample_rate=SR)
+        return float(np.sqrt(np.mean(sig ** 2)))
+
+    loud = rms(_amp_taym(0xFF))
+    quiet = rms(_amp_taym(0x30))
+    silent = rms(_amp_taym(0x00))
+    assert loud > quiet > silent, f"amp not monotone: {loud} {quiet} {silent}"
+    assert silent < 0.01, f"zero amplitude not silent: {silent}"
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:

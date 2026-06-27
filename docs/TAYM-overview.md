@@ -83,13 +83,17 @@ A target is what an action writes. Target IDs are chip-local, 8-bit, split:
 
 ```
 0x00..0x7F  real hardware registers (AY R0..R13 -- see appendix A of the spec)
-0x80..0xBF  format-defined virtual: reserved in draft 0.1 (future samples)
+0x80..0xBF  format-defined virtual: 0x80 sample amplitude (unquantized,
+            linear); 0x81..0xBF reserved
 0xC0..0xFF  engine-private virtual targets (per chip type)
 ```
 
-The format-virtual range is where future sample/wavetable targets will live,
-but draft 0.1 defines none -- it's reserved. (There's no sample store: samples
-are just lane data written at the timer rate, so pitch is the timer interval.)
+Virtual targets let you modulate things the register stream can't reach. There's
+no sample store: samples/wavetables are just lane data written at the timer rate
+(pitch = the timer interval). 0x80 carries the *unquantized* amplitude; the
+chip's own volume register (AY R8/9/10) supplies the level, and the engine
+combines them and quantizes once via the DAC curve -- so one unquantized
+waveform is reusable at several volumes without double-requantizing.
 
 ## File layout at a glance
 

@@ -512,29 +512,66 @@ Target IDs are chip-local. The 8-bit space is split:
 0x00..0x7F  hardware registers      real chip registers (e.g. AY R0..R13),
                                     standardized per chip type
 0x80..0xBF  format-specified virtual engine-interpreted targets with a
-                                    format-wide meaning. None are defined in
-                                    draft 0.1: the whole range is reserved for
-                                    a future sample/wavetable model.
+                                    format-wide meaning, defined below:
+            0x80  sample amplitude  unquantized, linear; U8 or U16 lane
+            0x81..0xBF  reserved for future format-specified virtual targets
 0xC0..0xFF  engine-interpreted      assigned by the chip registry, or by a
                                     private chip type's producer/consumer
                                     contract
 ```
 
 A virtual target is not a hardware register; it modulates an engine-level
-parameter the frame-data stream cannot reach. Draft 0.1 defines none: the
-sample/wavetable model (where such targets will live) is deferred to a later
-draft. There is no separate sample store yet -- sample and wavetable playback
-is ordinary lane data written at the timer's rate, so pitch is the timer
-interval.
+parameter the frame-data stream cannot reach. There is no separate sample
+store: sample and wavetable playback is ordinary lane data written at the
+timer's rate. Pitch is therefore the timer interval (a timer-lane sweeps it),
+not a target. `0x80` carries the *unquantized* sample amplitude; the chip's own
+volume register supplies the level, and the engine combines them and quantizes
+once (section 11.1).
 
 The hardware range is standardized per chip type by the separate target
 registry (the AY assignments are in appendix A). The format-specified virtual
-range (`0x80..0xBF`) is reserved -- invalid until a later draft assigns it. The
-engine-interpreted range is valid only when assigned by the chip registry, or
-when used with a private chip type.
+range has a fixed, chip-independent meaning (`0x80` defined here; `0x81..0xBF`
+reserved -- invalid until a later version assigns them). The engine-interpreted
+range is valid only when assigned by the chip registry, or when used with a
+private chip type.
 
 Unknown target IDs are invalid for a standardized chip. There is no
 producer-private target-ID range for standardized chip types.
+
+### 11.1 Sample amplitude (`0x80`)
+
+`0x80` carries an *unquantized, linear* sample amplitude on a lane, advanced at
+the timer's rate. It is an optional, space-saving convenience over the core
+lane+timer model -- one unquantized waveform can be reused at several volumes
+instead of baking a separately quantized copy per volume.
+
+`0x80` is never written to a register itself. Its **volume and output is a
+paired hardware amplitude register** in the same timer's slice: that register
+supplies the volume level and is the register the combined result is written to.
+The engine combines them and quantizes **once**, at the DAC boundary:
+
+```text
+linear_volume = delog(volume_register_code)      ; chip DAC curve
+output        = linear_volume * amplitude_0x80    ; both linear
+register_code = requantize(output)                ; nearest chip DAC code
+```
+
+Performing volume on the *unquantized* amplitude and quantizing once avoids the
+double, nonlinear requantization that scaling an already-quantized register
+value would incur (worst exactly where the log DAC steps are coarsest).
+
+The combine is chip-dependent (the DAC curve is a chip property; AY/YM are
+logarithmic with slightly different 16-step volume curves). It is defined per
+chip type in the registry; appendix A.3 gives the AY/YM rule.
+
+The amplitude **unit is producer/platform-chosen** -- the `0x80` lane is U8 or
+U16 (linear, full-scale at the type maximum). The format defines only the
+semantics and intent; a converter maps amplitude to its target's data path, and
+the reference AY engine is the oracle.
+
+The pairing is required and validated. For AY a slice containing `0x80` MUST
+also target **exactly one** of R8/R9/R10 (the volume + output register);
+otherwise the amplitude has nothing to combine into.
 
 Within every referenced action slice:
 
@@ -919,9 +956,18 @@ target ID; they are not addressable by timers.
 
 ### A.3 Virtual targets (`target_id` 0x80..0xFF)
 
-For `chip_type_id == 0x01`, draft 0.1 assigns no virtual target: `0x80..0xFF`
-are invalid unless assigned by a later AY registry version. Private AY-like
-engines use a private `chip_type_id`.
+For `chip_type_id == 0x01`, draft 0.1 assigns only `0x80` (sample amplitude)
+from section 11. `0x81..0xFF` are invalid unless assigned by a later AY registry
+version. Private AY-like engines use a private `chip_type_id`.
+
+The `0x80` combine (section 11.1) is logarithmic for AY: delog the paired
+amplitude register's 4-bit volume code through the chip DAC curve, multiply by
+the linear `0x80` amplitude, and requantize to the nearest 4-bit code. The
+volume code is the low 4 bits of R8/R9/R10 (bit 4 = envelope; envelope mode is
+not combined with `0x80`). AY and YM use the same 16-step volume mechanism with
+slightly different curves; the YM 32-step (5-bit) table is the envelope curve,
+not the volume curve, and is not used by the combine. A slice with `0x80` must
+pair with exactly one of R8/R9/R10.
 
 ### A.4 Registry status
 

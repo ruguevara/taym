@@ -123,16 +123,47 @@ def test_tlan_slice_oob():
 
 
 def test_action_target_reserved():
-    m = fresh(); m.actions[0].target_id = 0x90  # 0x80..0xBF reserved in draft 0.1
+    m = fresh(); m.actions[0].target_id = 0x90  # 0x81..0xBF reserved
     has(validate(m), "reserved/invalid")
 
 
-def test_format_virtual_range_all_reserved():
-    # Draft 0.1 defines no format-virtual target: 0x80..0x82 (the former
-    # sample amplitude/index/rate) are now reserved -> invalid.
-    for tid in (0x80, 0x81, 0x82):
-        m = fresh(); m.actions[0].target_id = tid
-        has(validate(m), "reserved/invalid")
+def test_action_target_rate_dropped():
+    # 0x82 (former sample rate) is now reserved -> invalid (generic path).
+    m = fresh(); m.actions[0].target_id = 0x82
+    has(validate(m), "reserved/invalid")
+
+
+def test_ay_target_rate_dropped():
+    # ...and also invalid on the AY-specific path.
+    m = fresh(); m.actions[0].target_id = 0x82
+    has(validate(m), "invalid for AY chip")
+
+
+def _amp_slice(m, targets):
+    # Replace the frame-0 START slice with inline-value actions (sorted).
+    m.actions = [Actn(target_id=t, source_mode=spec.SRC_INLINE_VALUE, operand=0)
+                 for t in sorted(targets)]
+    m.mods[0].first_action = 0
+    m.mods[0].action_count = len(targets)
+    return m
+
+
+def test_sample_amplitude_paired_ok():
+    # 0x80 amplitude + exactly one AY amp reg (R8 as volume + output).
+    m = _amp_slice(fresh(), [0x08, spec.TGT_SAMPLE_AMPLITUDE])
+    assert validate(m) == []
+
+
+def test_sample_amplitude_no_amp_reg():
+    # 0x80 with no R8/R9/R10 to combine into -> invalid.
+    m = _amp_slice(fresh(), [0x00, spec.TGT_SAMPLE_AMPLITUDE])
+    has(validate(m), "paired AY amp reg")
+
+
+def test_sample_amplitude_two_amp_regs():
+    # 0x80 with two amp regs -> ambiguous which carries volume/output.
+    m = _amp_slice(fresh(), [0x08, 0x09, spec.TGT_SAMPLE_AMPLITUDE])
+    has(validate(m), "paired AY amp reg")
 
 
 def test_action_bind_lane_oob():
@@ -161,6 +192,28 @@ def test_modulate_on_inactive():
     m.mods.append(Mods(command=spec.CMD_MODULATE, base_timer_value=25,
                        timer_lane_ref=spec.TLAN_UNCHANGED))
     has(validate(m), "MODULATE on")
+
+
+def test_modulate_owned_target_ok():
+    # START owns 0x08 (sample slice); a MODULATE re-pointing 0x08 is legal (S12.3).
+    m = fresh(); m.trak.frame_count = 3
+    m.mods[1] = Mods(command=spec.CMD_MODULATE, base_timer_value=0,
+                     timer_lane_ref=spec.TLAN_UNCHANGED,
+                     first_action=len(m.actions), action_count=1)
+    m.mods.append(Mods(command=spec.CMD_STOP))
+    m.actions.append(Actn(target_id=0x08, source_mode=spec.SRC_INLINE_VALUE, operand=5))
+    assert validate(m) == []
+
+
+def test_modulate_unowned_target_rejected():
+    # START owns only 0x08; a MODULATE naming 0x09 tries to add a target (S12.3).
+    m = fresh(); m.trak.frame_count = 3
+    m.mods[1] = Mods(command=spec.CMD_MODULATE, base_timer_value=0,
+                     timer_lane_ref=spec.TLAN_UNCHANGED,
+                     first_action=len(m.actions), action_count=1)
+    m.mods.append(Mods(command=spec.CMD_STOP))
+    m.actions.append(Actn(target_id=0x09, source_mode=spec.SRC_INLINE_VALUE, operand=5))
+    has(validate(m), "unowned target")
 
 
 def test_action_slice_unsorted():
