@@ -21,7 +21,7 @@ The repo holds the **spec** (normative) and **reference implementations** of it.
 ```
 docs/      normative spec (language-neutral) — the source of truth
 python/    Python reference reader/writer/validator + AY reference renderer
-c/         planned C reader/writer (not written yet)
+c/         C reference model + structural reader/writer
 ```
 
 - `docs/TAYM-overview.md` — informal tour / mental model. **Read this first.**
@@ -81,6 +81,15 @@ spec draft changes, edit `spec.py` first.**
 - `sample.py` — the canonical sample model + an audible tone+PWM demo; these are
   the golden fixtures (also intended as the C impl's cross-language oracle).
 - `engine/` — the offline **AY reference renderer** (the audio oracle).
+
+## Architecture (c)
+
+The C reference implementation is deliberately narrower than Python:
+`c/include/taym/taym.h` defines the owned-memory model and public API, and
+`c/src/taym.c` implements structural read/write only. It decodes little-endian
+fields explicitly and writes canonical chunk order, but it does **not** perform
+section-14 semantic validation and does not include an engine. The C tests use
+the Python canonical sample as the cross-language fixture.
 
 ### Sentinels and indices (common gotchas)
 

@@ -20,7 +20,7 @@ implementations** of it. Start with the
 ```
 docs/        the format specification (language-neutral, normative)
 python/      Python reference reader/writer/validator + AY reference renderer
-c/           C reference reader/writer  (planned)
+c/           C reference model + reader/writer
 ```
 
 - **[`docs/TAYM-format-draft-0.1.md`](docs/TAYM-format-draft-0.1.md)** — the
@@ -29,10 +29,9 @@ c/           C reference reader/writer  (planned)
 - **`python/`** — the `taym` package: codec, strict spec-section-14 validator,
   stats, dumps, and an offline AY reference renderer (`taym.engine`, the audio
   oracle). `pip install taym`. See `python/README.md`.
-- **`c/`** — a planned C reference reader/writer, so a plain C consumer on a
-  16-bit machine has a vetted implementation to start from. The format is
-  explicitly designed for this (little-endian, byte-packed, fixed-size records,
-  indices instead of pointers, no schema language).
+- **`c/`** — a C reference model plus structural reader/writer, so a plain C
+  consumer has a vetted implementation to start from. It intentionally omits
+  section-14 semantic validation and rendering.
 
 ## On LLM-assisted tooling
 

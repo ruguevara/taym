@@ -4,11 +4,11 @@
 
 This is the standalone TAYM monorepo, embedded under AYMax at `scripts/taym`.
 The language-neutral format source of truth is in `docs/`, especially
-`docs/TAYM-format-draft-0.1.md`. The active reference implementation lives in
+`docs/TAYM-format-draft-0.1.md`. The Python reference implementation lives in
 `python/`: package code is under `python/src/taym/`, CLI entry points are
 `taym` and `taym-render`, and tests are in `python/tests/`. The `c/` directory
-currently documents the planned C reader/writer and should treat the Python
-package as the behavioral oracle.
+contains the C reference model plus structural reader/writer and should treat
+the Python package as the behavioral oracle.
 
 ## Build, Test, and Development Commands
 
