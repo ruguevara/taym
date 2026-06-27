@@ -20,7 +20,14 @@ from .transform import drop_empty_timers
 from .validate import ValidationError, check, validate, validate_bytes
 from . import spec
 
-__version__ = "0.1.0"
+try:                                   # written at build time by hatch-vcs
+    from ._version import __version__
+except ImportError:                    # editable/source tree without a build
+    try:
+        from importlib.metadata import version as _v
+        __version__ = _v("taym")
+    except Exception:
+        __version__ = "0+unknown"
 
 __all__ = [
     "spec", "__version__",

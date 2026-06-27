@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "taym"
-version = "0.1.0"
+dynamic = ["version"]              # derived from the git tag via hatch-vcs
 description = "TAYM chip-music interchange format: reference reader/writer/validator + AY reference renderer"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -39,6 +39,19 @@ Documentation = "https://github.com/ruguevara/taym/blob/master/docs/TAYM-format-
 [project.scripts]
 taym = "taym.__main__:main"
 taym-render = "taym.engine.__main__:main"
+
+# Version comes from the git tag (vX.Y.Z). The .git lives at the repo root, one
+# level above this python/ dir, so point hatch-vcs there. A tagged commit gives
+# a clean PEP 440 version (v0.1.0 -> 0.1.0, v0.1.0rc1 -> 0.1.0rc1); off-tag
+# builds get a dev suffix.
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = ".." }
+
+# Write the resolved version into the package so `taym.__version__` works at
+# runtime from an installed wheel (no .git present). Generated, gitignored.
+[tool.hatch.build.hooks.vcs]
+version-file = "src/taym/_version.py"
 
 # The spec docs live once at the repo root (../docs). hatch_build.py copies them
 # into src/taym/docs/ before each build so they ship inside the package at
