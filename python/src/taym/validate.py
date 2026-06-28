@@ -214,6 +214,11 @@ def _mods(t: Taym, p):
                                          active_tlan_ref[ti], frame, p)
                 chip = t.timers[ti].chip_index
                 for a in slice_targets(rec):
+                    # S11.1: 0x80 is a per-timer output scaler, not exclusively
+                    # owned -- several timers may carry it (one per sample voice).
+                    # The exclusivity check applies to the paired amp register.
+                    if a.target_id == spec.TGT_SAMPLE_AMPLITUDE:
+                        continue
                     key = (chip, a.target_id)
                     if key in starts_this_frame:
                         p.append(f"S13.2: frame {frame} two STARTs claim chip "

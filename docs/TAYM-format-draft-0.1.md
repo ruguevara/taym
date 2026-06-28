@@ -573,6 +573,14 @@ The pairing is required and validated. For AY a slice containing `0x80` MUST
 also target **exactly one** of R8/R9/R10 (the volume + output register);
 otherwise the amplitude has nothing to combine into.
 
+`0x80` is not an exclusively-owned target. It scales only its **own timer's**
+slice and is never written to a register, so several timers may carry `0x80`
+at once -- one per voice playing a sample. The single-owner rule of section 13
+applies to the **paired hardware register** (R8/R9/R10), which is a real
+exclusively-owned target; two timers may not own the same amplitude register,
+but they may each carry their own `0x80`. A converter therefore reads
+concurrency on the paired register, not on `0x80`.
+
 Within every referenced action slice:
 
 - records are strictly sorted by `target_id`;
@@ -772,7 +780,10 @@ Timer commands in one frame are resolved without depending on timer index:
 4. write initial values for new starts.
 
 This permits timer A to release a target while timer B acquires it in the same
-frame. Two starts claiming the same target are invalid.
+frame. Two starts claiming the same target are invalid -- except for the
+per-timer output scaler `0x80` (section 11.1), which is not exclusively owned:
+two starts may both carry `0x80`, since each scales only its own timer's slice.
+The exclusivity check applies to its paired amplitude register instead.
 
 ## 14. Validation requirements
 
@@ -804,7 +815,8 @@ A draft-0.1 validator rejects at least:
   `UNCHANGED`;
 - an unsorted or duplicate target in an action slice;
 - a target/lane scalar-type mismatch;
-- concurrent ownership of one target by multiple timers;
+- concurrent ownership of one target by multiple timers (excluding `0x80`, the
+  per-timer scaler of section 11.1, which is not exclusively owned);
 - a `MODULATE` naming a target not established by the active `START`;
 - phase-preserving replacement with a different length or loop point;
 - `MODULATE` on an inactive or quiescent timer;
