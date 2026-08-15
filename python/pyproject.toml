@@ -28,7 +28,7 @@ dependencies = []
 [project.optional-dependencies]
 engine = [
     "numpy>=1.21",
-    "pyayay>=0.1",
+    "pyayay>=0.1.2",
 ]
 
 [project.urls]
