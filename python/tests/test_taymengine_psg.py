@@ -243,26 +243,16 @@ def test_reference_grade_buzz_continuity():
 
     eng = render(taym, sample_rate=SR)
     N = len(eng)
-    # fractional continuous reference: same regs once, R13 retriggered on the
-    # exact accumulator schedule the engine uses.
-    spe = SR / (AY_CLOCK / (16 * period))
+    # continuous reference, rendered in one block: same regs once at cycle 0,
+    # R13 retriggered every 16*period AY cycles on Ayumi's absolute timeline.
     ay = Ayumi(sample_rate=SR, clock=AY_CLOCK, type=ChipType.AY)
     for ch in range(3):
         ay.set_pan(ch, 0.5, True)
-    ay.set_registers(list(range(13)), regs[:13])
-    out, pos, acc = [], 0, 0.0
-    while pos < N:
-        if acc <= 0:
-            ay.set_envelope_shape(0x0E)
-            acc += spe
-        nxt = int(min(max(1.0, acc), N - pos))
-        L = np.zeros(nxt, dtype=np.float32)
-        R = np.zeros(nxt, dtype=np.float32)
-        ay.process_block(L, R, nxt)
-        out.append((L + R) * 0.5)
-        acc -= nxt
-        pos += nxt
-    ref = np.concatenate(out)[:N]
+    interval = 16 * period
+    writes = [(0, r, regs[r]) for r in range(13)]
+    writes += [(k * interval, 13, 0x0E) for k in range(ay.cycle_at(N) // interval + 1)]
+    ref = np.zeros(N, dtype=np.float32)
+    ay.render(ref, np.array(writes, dtype=np.uint64))
     n = min(len(eng), len(ref))
     maxdiff = float(np.abs(eng[:n] - ref[:n]).max())
     assert maxdiff < 1e-6, f"engine not bit-exact to continuous reference (maxdiff {maxdiff})"

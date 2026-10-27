@@ -102,19 +102,26 @@ the Python canonical sample as the cross-language fixture.
 
 ## The reference engine (engine/engine.py)
 
-Renders a TAYM file to PCM via **pyayay** (Ayumi AY core). It is the format's
+Renders a TAYM file to PCM via **pyayay** >= 0.2 (Ayumi AY core). It is the format's
 *audio oracle* — "what the bytes mean" — not a target runtime; deliberately
 simple and readable against the spec, not optimized. Import of numpy/pyayay is
 lazy so the core `taym` lib never depends on it.
 
-It is reference-grade (bit-exact to a fractional continuous Ayumi reference,
-`maxdiff < 1e-6`, for tone + R13 buzz) because of three non-obvious invariants,
-each pinned by a regression test in `tests/test_taymengine_psg.py` — **do not
-break these** (full rationale in `engine/README.md`):
+The engine works in two steps. `_frame_writes` interprets the format into a
+per-frame list of `(ay_cycle, reg, value)` writes (pure Python, no deps), and
+`_render` hands each frame's writes to pyayay's `Ayumi.render()`, which applies
+a write at absolute AY cycle `c` right before sample `ceil(c * sr / clock)`.
 
-1. **Continuous expiry clock** — `samples_to_expiry` is a float accumulator that
-   carries across frame boundaries; never reset per frame, never round the
-   interval to an integer rate.
+It is reference-grade (bit-exact to a continuous Ayumi reference,
+`maxdiff < 1e-6`, for tone + R13 buzz) because of three non-obvious invariants,
+each pinned by a regression test in `tests/test_taymengine_psg.py` /
+`tests/test_taymengine_timeline.py` — **do not break these** (full rationale in
+`engine/README.md`):
+
+1. **Continuous expiry clock** — `next_expiry` is the absolute AY cycle of a
+   timer's next expiry; it carries across frame boundaries, never resets per
+   frame, and is never rounded to an integer rate (CHIP_PERIOD intervals are
+   exact `divider * period` cycles; ABS_RATE_HZ ones are fractional).
 2. **Armed first write** — the first expiry after START (or a lane install via
    MODULATE) writes lane element 0 *without* advancing; tracked by an `armed`
    flag on the timer state, not a per-frame local.

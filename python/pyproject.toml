@@ -28,7 +28,7 @@ dependencies = []
 [project.optional-dependencies]
 engine = [
     "numpy>=1.21",
-    "pyayay>=0.1.2",
+    "pyayay>=0.2.0",          # render() on the absolute AY-cycle timeline
 ]
 
 [project.urls]

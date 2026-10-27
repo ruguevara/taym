@@ -9,9 +9,13 @@ single AY chip:
   - Each frame is subdivided by the active timer's rate: at every expiry the
     value lanes advance and the owned targets are (re)written; R13 writes
     retrigger the envelope (appendix A.2).
-  - ABS_RATE_HZ timer lanes give the expiry rate directly in Hz; a bare base
-    rate (no timer lane) is a constant rate. CHIP_PERIOD is supported via
-    rate = clock/(divider*period).
+  - Time is counted in AY clock cycles. A CHIP_PERIOD timer expires every
+    divider*period cycles (exact); an ABS_RATE_HZ rate is clock/rate cycles.
+    A bare base rate (no timer lane) is a constant rate.
+
+The interpretation produces a timeline of (ay_cycle, reg, value) writes
+(_frame_writes); Ayumi renders it on its absolute timeline (pyayay's render()),
+which applies a write at cycle c right before sample ceil(c*sample_rate/clock).
 
 Scope: the subset the converters emit (one active timer per chip is the common
 case; multiple are rendered independently and the last writer to a shared
@@ -22,6 +26,7 @@ once through the chip DAC curve. Otherwise this is an AY-register oracle.
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 from .. import spec
@@ -39,7 +44,7 @@ class EngineError(Exception):
 # --------------------------------------------------------------------------
 class _TimerState:
     __slots__ = ("active", "quiescent", "targets", "lane_idx", "tlan", "tlan_idx",
-                 "base_rate", "pending", "samples_to_expiry", "armed")
+                 "base_interval", "pending", "next_expiry", "armed")
 
     def __init__(self):
         self.reset()
@@ -51,12 +56,12 @@ class _TimerState:
         self.lane_idx = {}         # target_id -> running value-lane index
         self.tlan = None           # Tlan descriptor or None
         self.tlan_idx = 0
-        self.base_rate = 0.0       # Hz
+        self.base_interval = 0.0   # AY clock cycles between expiries; 0.0 = no rate
         self.pending = set()       # targets whose lane element 0 is pending (S12.3)
-        # Continuous sub-frame expiry clock (does NOT reset at frame boundaries):
-        self.samples_to_expiry = 0.0   # samples until the next expiry fires
-        self.armed = False             # True right after START/install: the next
-                                       # expiry writes element 0 without advancing
+        # Continuous expiry clock (does NOT reset at frame boundaries):
+        self.next_expiry = 0.0     # absolute AY cycle of the next expiry (fractional)
+        self.armed = False         # True right after START/install: the next
+                                   # expiry writes element 0 without advancing
 
 
 def _lane_values(t: Taym, lane):
@@ -149,27 +154,30 @@ def _advance(idx: int, lane) -> int:
     return lane.loop_index
 
 
-def _timer_rate_hz(t: Taym, timer, st: _TimerState) -> float:
-    """Effective expiry rate in Hz from base + active timer lane (S10)."""
-    base = st.base_rate
+def _period_cycles(timer, value: int, clock: int) -> float:
+    """One timer value as an expiry interval in AY clock cycles (S10); 0.0 when
+    the value gives no rate. CHIP_PERIOD is exact: divider * period cycles.
+    ABS_RATE_HZ is clock / rate, a fractional number of cycles."""
+    if timer.clock_mode == spec.CLOCK_ABS_RATE_HZ:
+        hz = spec.from_fix16(value)
+        return clock / hz if hz > 0 else 0.0
+    return float(timer.clock_divider * value)
+
+
+def _timer_interval(t: Taym, timer, st: _TimerState, clock: int) -> float:
+    """Effective expiry interval in AY clock cycles from base + active timer
+    lane (S10); 0.0 when the timer has no rate."""
+    base = st.base_interval
     if st.tlan is None:
         return base
     val = t.vu32[st.tlan.value_offset + st.tlan_idx]
     if st.tlan.timing_mode == spec.TM_ABSOLUTE:
-        if timer.clock_mode == spec.CLOCK_ABS_RATE_HZ:
-            return spec.from_fix16(val)
-        # CHIP_PERIOD: val is an integer period.
-        chip = t.chips[timer.chip_index]
-        return chip.clock_hz / (timer.clock_divider * val) if val else base
-    # RELATIVE: 16.16 multiplier on the base rate.
-    return base * spec.from_fix16(val)
-
-
-def _base_rate_hz(t: Taym, timer, base_timer_value: int) -> float:
-    if timer.clock_mode == spec.CLOCK_ABS_RATE_HZ:
-        return spec.from_fix16(base_timer_value)
-    chip = t.chips[timer.chip_index]
-    return chip.clock_hz / (timer.clock_divider * base_timer_value) if base_timer_value else 0.0
+        if timer.clock_mode == spec.CLOCK_CHIP_PERIOD and not val:
+            return base
+        return _period_cycles(timer, val, clock)
+    # RELATIVE: 16.16 multiplier on the base rate, so it divides the interval.
+    mult = spec.from_fix16(val)
+    return base / mult if mult > 0 else 0.0
 
 
 # --------------------------------------------------------------------------
@@ -241,18 +249,9 @@ def _render(taym, sample_rate: int, chip_index: int, stereo: bool, remove_dc: bo
     if chip.chip_type_id != spec.CHIP_TYPE_AY:
         raise EngineError(f"chip {chip_index} is not AY (0x{chip.chip_type_id:04X})")
 
-    # Background register frames from the chip's PSG stream (if any).
-    if chip.frame_data_tag and chip.frame_data_tag in t.frame_data:
-        bg = _parse_psg(t.frame_data[chip.frame_data_tag])
-    else:
-        bg = [[0] * 14 for _ in range(t.trak.frame_count)]
-    n = min(t.trak.frame_count, len(bg))
-
-    fps = t.trak.frame_rate_hz
-    spf = max(1, round(sample_rate / fps))
+    clock = chip.clock_hz or 1773400
     chip_type = ChipType.YM if chip.variant == spec.AY_VARIANT_YM else ChipType.AY
-    dac = _dac_table(chip.variant)   # S11.1 sample-amplitude combine curve
-    ay = Ayumi(sample_rate=sample_rate, clock=chip.clock_hz or 1773400, type=chip_type)
+    ay = Ayumi(sample_rate=sample_rate, clock=clock, type=chip_type)
     # Stereo: pan A/B/C per CHIP.config layout (A.1). Mono: all center, so the
     # (L+R)/2 mix is layout-independent and bit-exact.
     if stereo:
@@ -271,35 +270,62 @@ def _render(taym, sample_rate: int, chip_index: int, stereo: bool, remove_dc: bo
     for ch in range(3):
         ay.set_pan(ch, pans[ch], True)
 
+    # Ayumi's absolute timeline: a write at AY cycle c is applied right before
+    # sample ay.sample_at(c). Each frame renders up to the sample where the next
+    # frame starts, taking that frame's writes; an (n, 2) block gives
+    # interleaved stereo, an (n,) block the unbiased (L+R)/2 mono oracle mix.
+    blocks = [np.zeros((0, 2) if stereo else 0, dtype=np.float32)]
+    for frame, writes in enumerate(_frame_writes(t, chip_index, clock)):
+        stop = ay.sample_at(_frame_cycle(frame + 1, clock, t.trak.frame_rate_hz))
+        length = stop - ay.samples_rendered
+        block = np.zeros((length, 2) if stereo else length, dtype=np.float32)
+        ay.render(block, np.array(writes, dtype=np.uint64) if writes else None, remove_dc)
+        blocks.append(block)
+    out = np.concatenate(blocks)
+
+    if stereo:
+        return np.ascontiguousarray(out[:, 0]), np.ascontiguousarray(out[:, 1])
+    return out
+
+
+def _frame_cycle(frame: int, clock: int, fps: float) -> int:
+    """Absolute AY cycle where `frame` starts: frame / fps seconds, rounded up
+    to a whole cycle so a frame's writes never land before its time."""
+    return math.ceil(frame * clock / fps)
+
+
+def _frame_writes(t: Taym, chip_index: int, clock: int):
+    """The register-write timeline of one chip: yields, per frame, the list of
+    (ay_cycle, reg, value) writes, cycles absolute and non-decreasing.
+
+    This is the whole interpretation of the format (S10-S13); rendering is just
+    handing these writes to Ayumi. Needs no audio deps."""
+    chip = t.chips[chip_index]
+    # Background register frames from the chip's PSG stream (if any).
+    if chip.frame_data_tag and chip.frame_data_tag in t.frame_data:
+        bg = _parse_psg(t.frame_data[chip.frame_data_tag])
+    else:
+        bg = [[0] * 14 for _ in range(t.trak.frame_count)]
+    n = min(t.trak.frame_count, len(bg))
+    fps = t.trak.frame_rate_hz
+    dac = _dac_table(chip.variant)   # S11.1 sample-amplitude combine curve
+
     # Timers belonging to this chip.
     timer_ids = [i for i, tm in enumerate(t.timers) if tm.chip_index == chip_index]
     states = {i: _TimerState() for i in timer_ids}
     nt = len(t.timers)
-
-    outL = np.zeros(n * spf, dtype=np.float32)
-    outR = np.zeros(n * spf, dtype=np.float32) if stereo else None
-    bufL = np.zeros(spf, dtype=np.float32)
-    bufR = np.zeros(spf, dtype=np.float32)
-    pos = 0
     shadow = [None] * 14    # last value actually latched per reg (delta push)
 
-    def render_block(length):
-        nonlocal pos
-        ay.process_block(bufL[:length], bufR[:length], length, remove_dc)
-        if stereo:
-            outL[pos:pos + length] = bufL[:length]
-            outR[pos:pos + length] = bufR[:length]
-        else:                              # mono oracle: unbiased (L+R)/2
-            outL[pos:pos + length] = (bufL[:length] + bufR[:length]) * 0.5
-        pos += length
-
     for frame in range(n):
+        start = _frame_cycle(frame, clock, fps)
+        end = _frame_cycle(frame + 1, clock, fps)
+        writes = []
         regs = list(bg[frame])
         # 1. resolve MODS commands for this chip's timers (S13.2 order: STOP/
         #    replaced first, then START, then MODULATE -- simplified: apply in
         #    timer order; the validator forbids conflicting same-frame claims).
         for ti in timer_ids:
-            _apply_command(t, ti, states[ti], t.mods[frame * nt + ti])
+            _apply_command(t, ti, states[ti], t.mods[frame * nt + ti], clock, start)
 
         # 2. owned targets override background; collect active timers' writes.
         owned = {}   # target_id -> timer index owning it
@@ -314,38 +340,23 @@ def _render(taym, sample_rate: int, chip_index: int, stereo: bool, remove_dc: bo
         # the AY only latches on an actual write, and the .psg stream is itself
         # delta-coded, so a steady background re-writes nothing. Owned regs are
         # the timer's; never push them as background.
-        _push_regs_delta(ay, regs, owned, shadow)
+        _push_regs_delta(writes, start, regs, owned, shadow)
 
-        active = [ti for ti in timer_ids
-                  if states[ti].active and not states[ti].quiescent]
-        if not active:
-            # no active timer this frame: render the background frame straight.
-            render_block(spf)
-            continue
-
-        # Walk the frame as a sequence of sub-blocks bounded by timer expiries.
+        # 3. fire every expiry that falls inside this frame, in time order.
         # Each active timer carries its own continuous expiry clock across the
         # frame boundary (no per-frame reset -> no 50 Hz phase glitch).
-        s = 0
-        while s < spf:
-            # fire any expiries due now (samples_to_expiry <= 0).
-            for ti in active:
-                st = states[ti]
-                if st.samples_to_expiry <= 0.0:
-                    _expiry(t, ay, regs, ti, st, owned, dac)
-                    rate = _timer_rate_hz(t, t.timers[ti], st)
-                    st.samples_to_expiry += max(1.0, sample_rate / rate) if rate > 0 else spf
-            # render up to the nearest upcoming expiry or the frame end.
-            nxt = min((states[ti].samples_to_expiry for ti in active), default=spf)
-            chunk = int(min(max(1.0, nxt), spf - s))
-            render_block(chunk)
-            for ti in active:
-                states[ti].samples_to_expiry -= chunk
-            s += chunk
-
-    if stereo:
-        return outL[:pos], outR[:pos]
-    return outL[:pos]
+        active = [ti for ti in timer_ids
+                  if states[ti].active and not states[ti].quiescent]
+        while active:
+            ti = min(active, key=lambda i: states[i].next_expiry)
+            st = states[ti]
+            if st.next_expiry >= end:
+                break
+            _expiry(t, writes, math.ceil(st.next_expiry), ti, st, owned, dac)
+            interval = _timer_interval(t, t.timers[ti], st, clock)
+            # No rate: fire once per frame. Never faster than once per AY cycle.
+            st.next_expiry += max(1.0, interval) if interval > 0 else end - start
+        yield writes
 
 
 def _load(taym) -> Taym:
@@ -356,7 +367,7 @@ def _load(taym) -> Taym:
     return read_taym(Path(taym).read_bytes())
 
 
-def _apply_command(t: Taym, ti: int, st: _TimerState, m):
+def _apply_command(t: Taym, ti: int, st: _TimerState, m, clock: int, frame_start: int):
     cmd = m.command
     if cmd == spec.CMD_EMPTY:
         return
@@ -366,7 +377,7 @@ def _apply_command(t: Taym, ti: int, st: _TimerState, m):
     if cmd == spec.CMD_START:
         st.reset()
         st.active = True
-        st.base_rate = _base_rate_hz(t, t.timers[ti], m.base_timer_value)
+        st.base_interval = _period_cycles(t.timers[ti], m.base_timer_value, clock)
         st.tlan = None if m.timer_lane_ref in (spec.TLAN_NONE, spec.TLAN_UNCHANGED) \
             else t.tlanes[m.timer_lane_ref]
         st.tlan_idx = 0
@@ -376,16 +387,17 @@ def _apply_command(t: Taym, ti: int, st: _TimerState, m):
             inline = a.operand if a.source_mode == spec.SRC_INLINE_VALUE else 0
             st.targets.append((a.target_id, lane, inline))
             st.lane_idx[a.target_id] = 0
-        # S12.2: the first expiry (fired immediately) writes element 0 + loads
-        # interval 0 WITHOUT advancing. armed makes that one write a no-advance.
+        # S12.2: the first expiry (fired immediately, at the frame start) writes
+        # element 0 + loads interval 0 WITHOUT advancing. armed makes that one
+        # write a no-advance.
         st.armed = True
-        st.samples_to_expiry = 0.0
+        st.next_expiry = float(frame_start)
         return
     if cmd == spec.CMD_MODULATE:
         if not st.active:
             return  # validator forbids; be defensive
         if m.base_timer_value:
-            st.base_rate = _base_rate_hz(t, t.timers[ti], m.base_timer_value)
+            st.base_interval = _period_cycles(t.timers[ti], m.base_timer_value, clock)
         if m.timer_lane_ref == spec.TLAN_NONE:
             st.tlan = None
         elif m.timer_lane_ref != spec.TLAN_UNCHANGED:
@@ -415,14 +427,14 @@ def _apply_command(t: Taym, ti: int, st: _TimerState, m):
                 break
 
 
-def _push_regs_delta(ay, regs, owned, shadow):
-    """Latch only background regs that changed since the last write (S13.1).
+def _push_regs_delta(writes, cycle, regs, owned, shadow):
+    """Latch only background regs that changed since the last write (S13.1),
+    as writes at the frame's start `cycle`.
 
     An owned reg belongs to the timer: skip it and mark its shadow stale (None)
     so the background re-asserts cleanly once the timer releases it. A reg whose
     value equals its shadow is not re-written -- this is what keeps a steady
     tone/buzz envelope from being reset at every 50Hz frame."""
-    idxs, vals = [], []
     for r in range(14):
         if r in owned:
             shadow[r] = None          # timer owns it; force a background rewrite on release
@@ -431,17 +443,15 @@ def _push_regs_delta(ay, regs, owned, shadow):
         if r == 13 and (regs[r] & 0x80):
             continue                  # no-write sentinel: leave R13 untouched
         if shadow[r] != v:
-            idxs.append(r); vals.append(v)
+            writes.append((cycle, r, v))
             shadow[r] = v
-    if idxs:
-        ay.set_registers(idxs, vals)
 
 
-def _expiry(t: Taym, ay, regs, ti, st, owned, dac):
-    """One atomic timer expiry (S10.1, S13): advance lanes (unless armed = the
-    immediate post-START expiry), then write owned targets. The timer lane
-    advances with the value lanes; the new interval is loaded by the caller
-    from the post-advance tlan index."""
+def _expiry(t: Taym, writes, cycle, ti, st, owned, dac):
+    """One atomic timer expiry (S10.1, S13) at AY `cycle`: advance lanes
+    (unless armed = the immediate post-START expiry), then write owned targets.
+    The timer lane advances with the value lanes; the new interval is loaded by
+    the caller from the post-advance tlan index."""
     if st.armed:
         st.armed = False                 # this expiry writes element 0 as-is
     else:
@@ -472,9 +482,9 @@ def _expiry(t: Taym, ay, regs, ti, st, owned, dac):
             continue  # another timer owns it this frame (handoff edge)
         v = (_lane_values(t, lane)[st.lane_idx[tid]] if lane is not None else inline) & 0xFF
         if tid == spec.AY_R13_SHAPE:
-            ay.set_envelope_shape(v & 0x0F)   # write retriggers
+            writes.append((cycle, 13, v & 0x0F))   # every R13 write retriggers
         elif tid in spec.AY_AMP_REGS and amp_full is not None:
             amplitude, fs = amp_full       # v is the volume code; combine once
-            ay.set_registers([tid], [_combine_amp_code(dac, v, amplitude, fs)])
+            writes.append((cycle, tid, _combine_amp_code(dac, v, amplitude, fs)))
         elif tid <= 13:
-            ay.set_registers([tid], [v])
+            writes.append((cycle, tid, v))

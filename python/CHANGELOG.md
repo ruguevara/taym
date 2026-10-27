@@ -4,6 +4,20 @@ All notable changes to the `taym` Python package are documented here. The
 format follows [Keep a Changelog](https://keepachangelog.com/), and the project
 adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- `taym.engine` renders through pyayay's absolute-timeline `Ayumi.render()`
+  API and now requires `pyayay>=0.2.0`. The engine first builds a timeline of
+  `(ay_cycle, reg, value)` writes, then renders it with one call per frame;
+  about 3x faster on timer-heavy songs.
+- Frames and timer expiries are timed in AY clock cycles instead of output
+  samples. CHIP_PERIOD timers and frame rates that divide the sample rate render
+  bit-identically to before. An ABS_RATE_HZ expiry is rounded up to a whole AY
+  cycle, which can move it one sample later. A frame rate that does not divide
+  the sample rate no longer accumulates per-frame rounding drift.
+
 ## [0.1.0] - 2026-06-27
 
 Initial public release. Reference implementation of the TAYM (Timer-tricks
