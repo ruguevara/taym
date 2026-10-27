@@ -10,7 +10,7 @@ optimized.
 PYTHONPATH=scripts ../pyayay/.venv/bin/python -m taymengine song.taym -o song.wav
 ```
 
-Needs pyayay >= 0.2 + numpy; import is lazy so the `taym` lib never depends on
+Needs pyayay >= 0.2.1 + numpy; import is lazy so the `taym` lib never depends on
 it.
 
 ## What it models

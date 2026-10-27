@@ -102,7 +102,7 @@ the Python canonical sample as the cross-language fixture.
 
 ## The reference engine (engine/engine.py)
 
-Renders a TAYM file to PCM via **pyayay** >= 0.2 (Ayumi AY core). It is the format's
+Renders a TAYM file to PCM via **pyayay** >= 0.2.1 (Ayumi AY core). It is the format's
 *audio oracle* — "what the bytes mean" — not a target runtime; deliberately
 simple and readable against the spec, not optimized. Import of numpy/pyayay is
 lazy so the core `taym` lib never depends on it.

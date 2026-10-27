@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/).
 ### Changed
 
 - `taym.engine` renders through pyayay's absolute-timeline `Ayumi.render()`
-  API and now requires `pyayay>=0.2.0`. The engine first builds a timeline of
+  API and now requires `pyayay>=0.2.1`. The engine first builds a timeline of
   `(ay_cycle, reg, value)` writes, then renders it with one call per frame;
   about 3x faster on timer-heavy songs.
 - Frames and timer expiries are timed in AY clock cycles instead of output
