@@ -20,7 +20,8 @@ implementations** of it. Start with the
 ```
 docs/        the format specification (language-neutral, normative)
 python/      Python reference reader/writer/validator + AY reference renderer
-c/           C reference model + reader/writer
+c/           C reference model, reader/writer, and the timer engine
+examples/    real tunes in TAYM, used by the tests
 ```
 
 - **[`docs/TAYM-format-draft-0.1.md`](docs/TAYM-format-draft-0.1.md)** — the
@@ -29,9 +30,14 @@ c/           C reference model + reader/writer
 - **`python/`** — the `taym` package: codec, strict spec-section-14 validator,
   stats, dumps, and an offline AY reference renderer (`taym.engine`, the audio
   oracle). `pip install taym`. See `python/README.md`.
-- **`c/`** — a C reference model plus structural reader/writer, so a plain C
-  consumer has a vetted implementation to start from. It intentionally omits
-  section-14 semantic validation and rendering.
+- **`c/`** — a C reference model plus structural reader/writer, and the timer
+  engine: timer commands in, register writes out, with no allocation, so a
+  plain C consumer (a converter, a plugin, firmware) has a vetted
+  implementation to start from. Its write timeline is diffed against the
+  Python engine's. It omits section-14 semantic validation and audio rendering.
+  See `c/README.md`.
+- **[`examples/`](examples/README.md)** — real tunes exported to TAYM, with
+  credits.
 
 ## On LLM-assisted tooling
 

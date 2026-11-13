@@ -353,6 +353,12 @@ def _frame_writes(t: Taym, chip_index: int, clock: int):
             if st.next_expiry >= end:
                 break
             _expiry(t, writes, math.ceil(st.next_expiry), ti, st, owned, dac)
+            if st.quiescent:
+                # S10.2: its timer lane ended. It keeps its targets but fires
+                # no more expiries, so drop it from this frame's schedule --
+                # otherwise it stays the minimum forever and the loop spins.
+                active.remove(ti)
+                continue
             interval = _timer_interval(t, t.timers[ti], st, clock)
             # No rate: fire once per frame. Never faster than once per AY cycle.
             st.next_expiry += max(1.0, interval) if interval > 0 else end - start
@@ -451,10 +457,22 @@ def _expiry(t: Taym, writes, cycle, ti, st, owned, dac):
     """One atomic timer expiry (S10.1, S13) at AY `cycle`: advance lanes
     (unless armed = the immediate post-START expiry), then write owned targets.
     The timer lane advances with the value lanes; the new interval is loaded by
-    the caller from the post-advance tlan index."""
+    the caller from the post-advance tlan index.
+
+    S10.2: a no-loop timer lane runs its final interval and then makes the timer
+    quiescent. That final boundary performs no lane advance and no target write,
+    so this returns without writing; the timer keeps its targets and final
+    values until a STOP."""
     if st.armed:
         st.armed = False                 # this expiry writes element 0 as-is
     else:
+        # The timer lane first: its final boundary ends the timer (S10.2) and
+        # must not advance the value lanes or write.
+        if st.tlan is not None:
+            if st.tlan_idx + 1 >= st.tlan.length and st.tlan.loop_index == spec.NO_LOOP:
+                st.quiescent = True
+                return
+            st.tlan_idx = _advance(st.tlan_idx, st.tlan)
         for (tid, lane, _inline) in st.targets:
             if lane is None:
                 continue
@@ -462,8 +480,6 @@ def _expiry(t: Taym, writes, cycle, ti, st, owned, dac):
                 st.pending.discard(tid)  # S12.3: write element 0 without advancing
             else:
                 st.lane_idx[tid] = _advance(st.lane_idx[tid], lane)
-        if st.tlan is not None:
-            st.tlan_idx = _advance(st.tlan_idx, st.tlan)
     # S11.1: if this timer drives sample amplitude (0x80), grab its unquantized
     # value at full lane/inline width so the paired amp reg's write can combine.
     amp_full = None

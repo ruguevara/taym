@@ -287,3 +287,19 @@ if __name__ == "__main__":
         t()
         print(f"ok  {t.__name__}")
     print(f"\n{len(tests)} passed")
+
+
+def test_repo_examples_are_valid():
+    """Every tune in the repository's examples/ passes the validator. Skipped
+    when the tests run without the repository around them (an sdist)."""
+    from pathlib import Path
+    import pytest
+    from taym import read_taym
+    from taym.validate import validate, validate_bytes
+
+    examples = sorted((Path(__file__).resolve().parents[2] / "examples").glob("*.taym"))
+    if not examples:
+        pytest.skip("no examples directory")
+    for path in examples:
+        raw = path.read_bytes()
+        assert validate(read_taym(raw)) + validate_bytes(raw) == [], path.name

@@ -108,6 +108,123 @@ def build_audio_demo(frames: int = 75, pwm_hz: float = 300.0,
     )
 
 
+def _psg_from_deltas(frames: list) -> bytes:
+    """A Bulba .psg from per-frame {register: value} deltas, one dict per frame."""
+    out = bytearray(b"PSG\x1a" + bytes(12))
+    for delta in frames:
+        out.append(0xFF)
+        for reg, value in sorted(delta.items()):
+            out += bytes((reg, value & 0xFF))
+    out.append(0xFD)
+    return bytes(out)
+
+
+def build_engine_fixture() -> Taym:
+    """A valid file that walks the engine through its rules, for diffing one
+    engine's write timeline against another's (`cd c && make test`). Not meant
+    to sound like anything.
+
+    Two timers on one chip over 14 frames, with a PSG background that keeps
+    changing under them:
+
+      T0 (CHIP_PERIOD)  PWM on R8; MODULATE of the base, lane -> inline,
+                        inline -> lane (pending element 0), lane -> lane (phase
+                        kept); STOP back to the background; an R13 buzzer; a
+                        timer lane whose multiplier drops to zero (no rate).
+      T1 (ABS_RATE_HZ)  a U16 0x80 sample amplitude paired with R9 on a
+                        RELATIVE timer lane; timer-lane swap and removal; a
+                        no-loop ABSOLUTE timer lane (quiescence, S10.2); taking
+                        R13 from T0 in the same frame (S13.2); a one-shot value
+                        lane (dormancy, S9.1).
+    """
+    hz = spec.to_fix16
+    empty = Mods(command=spec.CMD_EMPTY)
+    stop = Mods(command=spec.CMD_STOP)
+
+    def start(base, tlan, first, count):
+        return Mods(command=spec.CMD_START, base_timer_value=base,
+                    timer_lane_ref=tlan, first_action=first, action_count=count)
+
+    def modulate(base=0, tlan=spec.TLAN_UNCHANGED, first=0, count=0):
+        return Mods(command=spec.CMD_MODULATE, base_timer_value=base,
+                    timer_lane_ref=tlan, first_action=first, action_count=count)
+
+    none = spec.TLAN_NONE
+    # One (T0, T1) pair per frame.
+    frames = [
+        (start(222, none, 0, 1),        empty),                         # 0  PWM on R8
+        (empty,                         start(hz(300.37), 0, 3, 2)),    # 1  sample, relative lane
+        (modulate(base=180),            empty),                         # 2  new base
+        (modulate(first=1, count=1),    modulate(tlan=3)),              # 3  lane -> inline; lane swap
+        (modulate(first=2, count=1),    modulate(tlan=none)),           # 4  inline -> lane; lane removed
+        (modulate(first=0, count=1),    modulate(base=hz(450.0))),      # 5  lane -> lane; new base
+        (stop,                          start(hz(500.0), 1, 5, 1)),     # 6  release R8; quiescence
+        (start(60, none, 6, 1),         empty),                         # 7  R13 buzzer
+        (empty,                         stop),                          # 8
+        (stop,                          start(hz(2000.0), none, 7, 2)), # 9  R13 changes hands
+        (start(222, 2, 0, 1),           empty),                         # 10 rate drops to zero
+        (empty,                         start(hz(1000.0), none, 5, 1)), # 11 one-shot value lane
+        (stop,                          empty),                         # 12
+        (empty,                         stop),                          # 13
+    ]
+    psg = _psg_from_deltas([
+        {0: 0xFC, 1: 0x01, 2: 0x7E, 3: 0x00, 4: 0x40, 5: 0x00, 6: 0x05,
+         7: 0b111000, 8: 10, 9: 11, 10: 12, 11: 0x20, 12: 0x00},
+        {0: 0xF0},
+        {8: 13},                    # under T0: held back until the STOP
+        {11: 0x30, 13: 0x0A},       # a real envelope-shape write
+        {2: 0x70},
+        {},
+        {8: 14},                    # the frame T0 releases R8
+        {0: 0xE0},
+        {9: 5},
+        {},
+        {10: 3},
+        {},
+        {1: 0x02},
+        {8: 0},
+    ])
+    return Taym(
+        trak=Trak(frame_rate_hz=50.0, frame_count=len(frames), loop_frame=spec.NO_LOOP),
+        chips=[Chip(clock_hz=AY_CLOCK, chip_type_id=spec.CHIP_TYPE_AY,
+                    name="AY", frame_data_tag="PSG0")],
+        timers=[Timr(chip_index=0, clock_mode=spec.CLOCK_CHIP_PERIOD, clock_divider=16),
+                Timr(chip_index=0, clock_mode=spec.CLOCK_ABS_RATE_HZ)],
+        mods=[m for pair in frames for m in pair],
+        actions=[
+            Actn(target_id=0x08, source_mode=spec.SRC_BIND_LANE, operand=0),       # 0
+            Actn(target_id=0x08, source_mode=spec.SRC_INLINE_VALUE, operand=7),    # 1
+            Actn(target_id=0x08, source_mode=spec.SRC_BIND_LANE, operand=1),       # 2
+            Actn(target_id=0x09, source_mode=spec.SRC_INLINE_VALUE, operand=12),   # 3
+            Actn(target_id=spec.TGT_SAMPLE_AMPLITUDE,
+                 source_mode=spec.SRC_BIND_LANE, operand=2),                       # 4
+            Actn(target_id=0x0A, source_mode=spec.SRC_BIND_LANE, operand=3),       # 5
+            Actn(target_id=0x0D, source_mode=spec.SRC_INLINE_VALUE, operand=0x0C), # 6
+            Actn(target_id=0x0B, source_mode=spec.SRC_INLINE_VALUE, operand=8),    # 7
+            Actn(target_id=0x0D, source_mode=spec.SRC_INLINE_VALUE, operand=0x0E), # 8
+        ],
+        lanes=[
+            Lane(value_type=spec.VT_U8, value_offset=0, length=2, loop_index=0),   # 0 [15, 9]
+            Lane(value_type=spec.VT_U8, value_offset=2, length=2, loop_index=0),   # 1 [3, 0]
+            Lane(value_type=spec.VT_U16, value_offset=0, length=6, loop_index=1),  # 2 amplitude
+            Lane(value_type=spec.VT_U8, value_offset=4, length=4),                 # 3 one-shot
+        ],
+        tlanes=[
+            Tlan(timing_mode=spec.TM_RELATIVE, value_offset=0, length=3, loop_index=0),  # 0
+            Tlan(timing_mode=spec.TM_ABSOLUTE, value_offset=3, length=3),                # 1 no loop
+            Tlan(timing_mode=spec.TM_RELATIVE, value_offset=6, length=2, loop_index=1),  # 2 -> x0
+            Tlan(timing_mode=spec.TM_RELATIVE, value_offset=8, length=3, loop_index=0),  # 3
+        ],
+        vu08=[15, 9, 3, 0, 12, 8, 4, 0],
+        vu16=[0, 16384, 32768, 49152, 65535, 32768],
+        vu32=[hz(1.0), hz(2.0), hz(0.5),
+              hz(400.0), hz(800.0), hz(600.0),
+              hz(1.0), 0,
+              hz(0.5), hz(1.0), hz(2.0)],
+        frame_data={"PSG0": psg},
+    )
+
+
 def build() -> bytes:
     # --- value pools -----------------------------------------------------
     vu08 = bytes([15, 0])                                  # value lane data
