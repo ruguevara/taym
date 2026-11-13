@@ -64,10 +64,11 @@ pyayay's absolute timeline a write at cycle `c` is applied right before sample
 cut into blocks does not change the output. The write timeline itself does not
 depend on the sample rate at all.
 
-## Three invariants that make it reference-grade
+## Four invariants that make it reference-grade
 
 These are non-obvious and were each a real bug before being fixed; the
-regression tests in `tests/test_taymengine_psg.py` pin them.
+regression tests in `tests/test_taymengine_psg.py` and
+`tests/test_taymengine_timeline.py` pin them.
 
 - **Continuous expiry clock.** `_TimerState.next_expiry` is the absolute AY
   cycle of the timer's next expiry and carries across frame boundaries. It must
@@ -88,6 +89,21 @@ regression tests in `tests/test_taymengine_psg.py` pin them.
   `_push_regs_delta` writes only registers whose value changed since the last
   latch. An owned register's shadow is set stale (`None`) so the background
   re-asserts cleanly when the timer releases it.
+
+- **Timer-lane completion (S10.2).** A *no-loop* timer lane runs its final
+  interval and then makes the timer **quiescent**: `_expiry` returns without
+  advancing the value lanes and without writing, and the main loop drops the
+  timer from the frame's schedule. It keeps its targets and final values until
+  a `STOP` -- quiescent is not stopped. A *looping* final element means the
+  opposite: continue indefinitely at that interval.
+
+  The trap is to reuse value-lane dormancy here (stick on the final element and
+  keep firing), which runs the timer forever -- 60 expiries where the spec wants
+  2. This was found by diffing the C engine (`c/src/taym_timers.c`) against this
+  one: both had declared a `quiescent` flag and never set it, so the two agreed
+  with each other while disagreeing with the spec. The lesson is that the
+  cross-language diff checks consistency, and only the spec text checks
+  correctness.
 
 ## Mono mixdown and stereo
 

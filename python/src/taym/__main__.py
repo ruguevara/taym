@@ -5,7 +5,10 @@
   dump     FILE   structural field-by-field dump (--timeline for decoded view;
                   --from/--to N|Ts limit the timeline frame range, e.g. 2.5s)
   sample   [OUT]  write the built-in canonical sample, or print it if no OUT
-                  (--audio: an audible 1.5s tone+PWM demo instead)
+                  (--audio: an audible 1.5s tone+PWM demo instead;
+                  --engine: the engine-rules fixture for cross-engine diffs)
+  writes   FILE   the register-write timeline, one "frame cycle reg value" per
+                  line (the C engine's cross-language oracle; no audio deps)
 
   python -m taym sample song.taym && python -m taym dump --timeline song.taym
 
@@ -81,6 +84,10 @@ def cmd_sample(args):
         from .sample import build_audio_demo
         data = write_taym(build_audio_demo())
         kind = "audio demo"
+    elif args.engine:
+        from .sample import build_engine_fixture
+        data = write_taym(build_engine_fixture())
+        kind = "engine fixture"
     else:
         data = write_taym(build_model())
         kind = "sample"
@@ -89,6 +96,23 @@ def cmd_sample(args):
         print(f"wrote {args.out} ({len(data)} bytes, {kind})")
     else:
         print(_dump.structural(data))
+    return 0
+
+
+def cmd_writes(args):
+    """The register-write timeline as text, for diffing against another
+    implementation. _frame_writes is the oracle's whole interpretation of the
+    format and needs no audio deps, so this runs anywhere."""
+    from .engine.engine import _frame_writes
+    _, t = _read(args.file)
+    if args.chip >= len(t.chips):
+        _die(f"chip {args.chip}: file has {len(t.chips)}")
+    clock = t.chips[args.chip].clock_hz or 1773400
+    out = []
+    for frame, writes in enumerate(_frame_writes(t, args.chip, clock)):
+        for (cycle, reg, value) in writes:
+            out.append(f"{frame} {cycle} {reg} {value}")
+    print("\n".join(out))
     return 0
 
 
@@ -126,7 +150,14 @@ def build_parser():
     s.add_argument("out", nargs="?", help="output file (prints structural dump if omitted)")
     s.add_argument("--audio", action="store_true",
                    help="audible 1.5s tone+PWM demo instead of the canonical sample")
+    s.add_argument("--engine", action="store_true",
+                   help="the engine-rules fixture other engines are diffed against")
     s.set_defaults(func=cmd_sample)
+
+    s = sub.add_parser("writes", help="register-write timeline as text (oracle for other engines)")
+    s.add_argument("file", help="TAYM file to interpret")
+    s.add_argument("--chip", type=int, default=0, help="chip index (default 0)")
+    s.set_defaults(func=cmd_writes)
 
     return p
 

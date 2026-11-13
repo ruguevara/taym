@@ -6,6 +6,7 @@ dist/
 .pytest_cache/
 .venv/
 *.taym
+!examples/*.taym
 *.wav
 
 # Spec docs vendored into the package at build time by python/hatch_build.py;

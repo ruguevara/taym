@@ -7,8 +7,10 @@ The language-neutral format source of truth is in `docs/`, especially
 `docs/TAYM-format-draft-0.1.md`. The Python reference implementation lives in
 `python/`: package code is under `python/src/taym/`, CLI entry points are
 `taym` and `taym-render`, and tests are in `python/tests/`. The `c/` directory
-contains the C reference model plus structural reader/writer and should treat
-the Python package as the behavioral oracle.
+contains the C reference model, structural reader/writer, and the timer engine
+(S9..S13) with its frame walker; it treats the Python package as the behavioral
+oracle, and `cd c && make test` diffs the C register-write timeline against
+`python -m taym writes` write for write.
 
 ## Build, Test, and Development Commands
 

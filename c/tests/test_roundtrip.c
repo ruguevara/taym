@@ -226,7 +226,7 @@ static void test_frame_data_chunk_round_trip(void)
     taym.chunks = (TaymChunk *)calloc(1, sizeof(*taym.chunks));
     memcpy(taym.chunks[0].tag, psg0, 4);
     taym.chunks[0].size = sizeof(payload);
-    taym.chunks[0].data = (uint8_t *)calloc(sizeof(payload), 1);
+    taym.chunks[0].data = (uint8_t *)calloc(1, sizeof(payload));
     memcpy(taym.chunks[0].data, payload, sizeof(payload));
 
     r = taym_write_bytes(&taym, &bytes, &size);

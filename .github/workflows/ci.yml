@@ -6,7 +6,9 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest (26.04) has no Python 3.9, which the package still
+    # supports (requires-python >= 3.9).
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         python-version: ["3.9", "3.11", "3.13"]
@@ -30,3 +32,25 @@ jobs:
           python -m pip install -e .[engine] || python -m pip install -e .
       - name: Test
         run: python -m pytest -q
+
+  c:
+    # The C reference: structural round trip, the timer engine's own checks,
+    # and the cross-language diff of its write timeline against the Python
+    # oracle. The Makefile drives the Python CLI for the fixtures, so this job
+    # needs the package importable but none of the engine's audio deps.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install the Python package
+        working-directory: python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+      - name: Test
+        working-directory: c
+        run: make test CFLAGS="-std=c99 -Wall -Wextra -pedantic -Werror -Iinclude"

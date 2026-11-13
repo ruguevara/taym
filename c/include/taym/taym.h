@@ -57,8 +57,11 @@ extern "C" {
 #define TAYM_AY_VARIANT_YM 0x01u
 #define TAYM_CHIP_CONFIG_DEFAULT UINT32_C(0)
 
-/* Format-virtual target range 0x80..0xBF is reserved -> invalid in draft 0.1
-   (no sample/wavetable model yet); a later draft will assign it. */
+/* Format-virtual targets (0x80..0xBF, S11): the same meaning on every chip.
+   0x80 is the unquantized sample amplitude (S11.1); 0x81..0xBF are reserved. */
+#define TAYM_TGT_SAMPLE_AMPLITUDE 0x80u
+
+/* AY hardware targets (appendix A): R0..R13. */
 #define TAYM_AY_TARGET_MAX 0x0Du
 #define TAYM_AY_R13_SHAPE 0x0Du
 

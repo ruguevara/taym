@@ -21,7 +21,7 @@ The repo holds the **spec** (normative) and **reference implementations** of it.
 ```
 docs/      normative spec (language-neutral) — the source of truth
 python/    Python reference reader/writer/validator + AY reference renderer
-c/         C reference model + structural reader/writer
+c/         C reference model, structural reader/writer, and the timer engine
 ```
 
 - `docs/TAYM-overview.md` — informal tour / mental model. **Read this first.**
@@ -51,9 +51,14 @@ python -m taym stats    song.taym          # counts, MODS histogram, per-timer
 python -m taym dump     song.taym          # structural field-by-field
 python -m taym dump --timeline song.taym   # decoded per-frame timer events
 python -m taym sample   out.taym           # write the canonical sample fixture
+python -m taym sample --engine out.taym    # the engine-rules fixture (cross-engine diffs)
+python -m taym writes   song.taym          # register-write timeline as text
 python -m taym.engine   song.taym -o out.wav   # render to WAV, stereo per CHIP.config (A.1)
 python -m taym.engine   song.taym --mono       # 1-ch WAV instead
 ```
+
+`writes` prints `frame cycle reg value` per line and needs no audio deps: it is
+the oracle the C engine is diffed against (`cd c && make test`).
 
 ## Architecture (python/src/taym)
 
@@ -84,12 +89,35 @@ spec draft changes, edit `spec.py` first.**
 
 ## Architecture (c)
 
-The C reference implementation is deliberately narrower than Python:
-`c/include/taym/taym.h` defines the owned-memory model and public API, and
-`c/src/taym.c` implements structural read/write only. It decodes little-endian
-fields explicitly and writes canonical chunk order, but it does **not** perform
-section-14 semantic validation and does not include an engine. The C tests use
-the Python canonical sample as the cross-language fixture.
+`c/include/taym/taym.h` + `c/src/taym.c` are the owned-memory model and
+structural read/write: little-endian decoded explicitly, canonical chunk order,
+but **no** section-14 semantic validation (use the Python validator).
+
+`c/include/taym/taym_timers.h` + `c/src/taym_timers.c` are the **timer engine**
+(S9..S13): commands in, `(cycle, target, value)` writes out. No allocation, no
+I/O, all state in a caller-owned `TaymTimerBank` — so the same code serves the
+offline walker and a real-time host (audio plugin, embedded firmware). Read it
+next to `python/src/taym/engine/engine.py`; they are deliberately the same
+algorithm and the Python one is the oracle.
+
+**The engine is chip-agnostic; keep it that way.** It reports raw target
+values (any id, up to 32 bits, virtual targets included) and knows no register,
+width or DAC. Chip rules live in a per-chip file: `c/src/taym_ay.c`
+(`taym_ay_resolve`) turns an expiry's target writes into AY register writes —
+byte registers, R13's four bits, the 0x80 amplitude combine. The Python engine
+is AY-only and mixes the two; the C split is the model for another chip.
+
+`c/include/taym/taym_player.h` + `c/src/taym_player.c` add the frame loop, the
+PSG background and the S13.1 delta push for an AY chip, mirroring
+`engine._frame_writes`.
+
+`make test` runs the structural round trip, the engine's unit checks
+(`tests/test_timers.c`, covering the rules the fixtures don't reach), and the
+**cross-language diff**: the C timeline (`tests/taym_timeline.c`) against
+`python -m taym writes` must be byte-identical. Keep those two output formats
+in sync — the diff is how the C engine is held to the oracle. The three
+engine invariants in the section below apply verbatim to the C engine, and
+`tests/test_timers.c` pins each one.
 
 ### Sentinels and indices (common gotchas)
 
@@ -113,7 +141,7 @@ per-frame list of `(ay_cycle, reg, value)` writes (pure Python, no deps), and
 a write at absolute AY cycle `c` right before sample `ceil(c * sr / clock)`.
 
 It is reference-grade (bit-exact to a continuous Ayumi reference,
-`maxdiff < 1e-6`, for tone + R13 buzz) because of three non-obvious invariants,
+`maxdiff < 1e-6`, for tone + R13 buzz) because of four non-obvious invariants,
 each pinned by a regression test in `tests/test_taymengine_psg.py` /
 `tests/test_taymengine_timeline.py` — **do not break these** (full rationale in
 `engine/README.md`):
@@ -128,6 +156,12 @@ each pinned by a regression test in `tests/test_taymengine_psg.py` /
 3. **Delta register push** — only write background registers whose value
    changed; re-latching unchanged R8/R11/R12 resets the AY envelope generator
    mid-buzz.
+4. **Timer-lane completion (S10.2)** — a *no-loop* timer lane runs its final
+   interval and then makes the timer **quiescent**: no further expiries, and no
+   advance or write at that final boundary, though it keeps its targets until a
+   STOP. A *looping* final element means "continue indefinitely" instead.
+   Treating the no-loop case as a dormant value (keep firing at that interval)
+   runs the timer forever. Found by diffing the C engine against this one.
 
 **Verify engine output by eye (sample-resolution waveform plots, see
 `scripts/taym_scope.py`) and by bit-exact diff — NEVER by spectral or
