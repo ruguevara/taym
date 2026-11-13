@@ -32,7 +32,7 @@ from pathlib import Path
 from .. import spec
 from ..codec import read_taym
 from ..model import Taym
-from ..psg import parse_psg as _parse_psg
+from ..psg import R13_NO_WRITE, parse_psg as _parse_psg
 
 
 class EngineError(Exception):
@@ -305,7 +305,9 @@ def _frame_writes(t: Taym, chip_index: int, clock: int):
     if chip.frame_data_tag and chip.frame_data_tag in t.frame_data:
         bg = _parse_psg(t.frame_data[chip.frame_data_tag])
     else:
-        bg = [[0] * 14 for _ in range(t.trak.frame_count)]
+        # No stream: all-zero registers, latched once. R13 is an event (see
+        # _push_background), so its zero is a write in frame 0 only.
+        bg = [[0] * 14] + [[0] * 13 + [R13_NO_WRITE]] * (t.trak.frame_count - 1)
     n = min(t.trak.frame_count, len(bg))
     fps = t.trak.frame_rate_hz
     dac = _dac_table(chip.variant)   # S11.1 sample-amplitude combine curve
@@ -315,6 +317,7 @@ def _frame_writes(t: Taym, chip_index: int, clock: int):
     states = {i: _TimerState() for i in timer_ids}
     nt = len(t.timers)
     shadow = [None] * 14    # last value actually latched per reg (delta push)
+    bg_r13 = R13_NO_WRITE   # the background's last R13 write, for the hand-back
 
     for frame in range(n):
         start = _frame_cycle(frame, clock, fps)
@@ -335,12 +338,22 @@ def _frame_writes(t: Taym, chip_index: int, clock: int):
                 for (tid, _lane, _inline) in st.targets:
                     owned[tid] = ti
 
-        # Write only CHANGED background regs (S13.1). Re-latching an unchanged
-        # R8/R11/R12 every frame would reset the envelope generator mid-buzz --
-        # the AY only latches on an actual write, and the .psg stream is itself
-        # delta-coded, so a steady background re-writes nothing. Owned regs are
-        # the timer's; never push them as background.
-        _push_regs_delta(writes, start, regs, owned, shadow)
+        # Write only CHANGED background regs (S13.1): the AY only latches on an
+        # actual write, and the .psg stream is itself delta-coded, so a steady
+        # background re-writes nothing. Owned regs are the timer's; never push
+        # them as background.
+        #
+        # R13 is the exception: an event, not a state. The frame carries it
+        # only when the stream writes it, and then it is written whatever its
+        # value; in any other frame it is left alone, since re-latching it
+        # would restart the envelope mid-buzz. The background's last shape is
+        # still remembered here (a write under a timer included), so a release
+        # can hand it back.
+        r13_written = not (regs[13] & 0x80)
+        if r13_written:
+            bg_r13 = regs[13]
+        regs[13] = bg_r13
+        _push_background(writes, start, regs, owned, shadow, r13_written)
 
         # 3. fire every expiry that falls inside this frame, in time order.
         # Each active timer carries its own continuous expiry clock across the
@@ -433,22 +446,28 @@ def _apply_command(t: Taym, ti: int, st: _TimerState, m, clock: int, frame_start
                 break
 
 
-def _push_regs_delta(writes, cycle, regs, owned, shadow):
-    """Latch only background regs that changed since the last write (S13.1),
-    as writes at the frame's start `cycle`.
+def _push_background(writes, cycle, regs, owned, shadow, r13_written):
+    """Latch the background `regs` (S13.1) as writes at the frame's start
+    `cycle`: R0..R12 when they changed since the last write, R13 also whenever
+    the stream writes it in this frame (`r13_written`).
 
     An owned reg belongs to the timer: skip it and mark its shadow stale (None)
     so the background re-asserts cleanly once the timer releases it. A reg whose
-    value equals its shadow is not re-written -- this is what keeps a steady
-    tone/buzz envelope from being reset at every 50Hz frame."""
+    value equals its shadow is not re-written.
+
+    R13 is not held to that delta rule, because writing it restarts the
+    envelope, the same shape too: a repeated R13 write in the stream is a
+    retrigger and must be kept (S6.2). R0..R12 stay on the delta rule: a
+    repeated write of the value such a register already holds changes nothing
+    audible, so dropping it loses nothing."""
     for r in range(14):
         if r in owned:
             shadow[r] = None          # timer owns it; force a background rewrite on release
             continue
         v = regs[r] & 0xFF
-        if r == 13 and (regs[r] & 0x80):
-            continue                  # no-write sentinel: leave R13 untouched
-        if shadow[r] != v:
+        if r == 13 and (v & 0x80):
+            continue                  # the stream has not written R13 yet
+        if shadow[r] != v or (r == 13 and r13_written):
             writes.append((cycle, r, v))
             shadow[r] = v
 

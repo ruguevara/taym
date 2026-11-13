@@ -19,6 +19,7 @@ import struct
 
 from . import spec
 from .model import Taym
+from .psg import psg_frame_count
 
 
 class ValidationError(Exception):
@@ -362,6 +363,10 @@ def _frame_data(t: Taym, p):
         if c.chip_type_id == spec.CHIP_TYPE_AY:
             if payload[:4] != b"PSG\x1a":
                 p.append(f"S6.2: CHIP[{i}] frame data {c.frame_data_tag!r} lacks PSG header")
+            elif psg_frame_count(payload) != t.trak.frame_count:
+                p.append(f"S6.2: CHIP[{i}] frame data {c.frame_data_tag!r} decodes to "
+                         f"{psg_frame_count(payload)} frames, TRAK.frame_count is "
+                         f"{t.trak.frame_count}")
 
 
 # --------------------------------------------------------------------------

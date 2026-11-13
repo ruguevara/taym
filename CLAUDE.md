@@ -108,7 +108,7 @@ byte registers, R13's four bits, the 0x80 amplitude combine. The Python engine
 is AY-only and mixes the two; the C split is the model for another chip.
 
 `c/include/taym/taym_player.h` + `c/src/taym_player.c` add the frame loop, the
-PSG background and the S13.1 delta push for an AY chip, mirroring
+PSG background and the S13.1 background push for an AY chip, mirroring
 `engine._frame_writes`.
 
 `make test` runs the structural round trip, the engine's unit checks
@@ -153,9 +153,15 @@ each pinned by a regression test in `tests/test_taymengine_psg.py` /
 2. **Armed first write** — the first expiry after START (or a lane install via
    MODULATE) writes lane element 0 *without* advancing; tracked by an `armed`
    flag on the timer state, not a per-frame local.
-3. **Delta register push** — only write background registers whose value
-   changed; re-latching unchanged R8/R11/R12 resets the AY envelope generator
-   mid-buzz.
+3. **Background push: delta for R0..R12, every write for R13** — R0..R12 are
+   states: write one only when its value changed (a repeat of the value it
+   holds changes nothing audible). R13 is an event, because every write of it
+   restarts the envelope, the same shape too: `parse_psg` gives a frame its
+   R13 only when the stream writes it there (`0xFF` otherwise), and the engine
+   writes it then, whatever the value. So a repeated shape in the stream is
+   kept (S6.2), and a frame that does not write R13 never re-latches it, which
+   would reset the envelope mid-buzz. A timer that releases R13 hands it back
+   with the background's last shape.
 4. **Timer-lane completion (S10.2)** — a *no-loop* timer lane runs its final
    interval and then makes the timer **quiescent**: no further expiries, and no
    advance or write at that final boundary, though it keeps its targets until a

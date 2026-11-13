@@ -8,19 +8,32 @@ from __future__ import annotations
 
 PSG_MAGIC = b"PSG\x1a"
 
+# A frame's R13 when the stream does not write R13 in that frame.
+R13_NO_WRITE = 0xFF
+
+# Standard Bulba: `$FE n` stands for 4*n frames without writes.
+PAUSE_FRAMES = 4
+
 
 def parse_psg(data: bytes) -> list[list[int]]:
-    """Bulba .PSG -> list of absolute 14-byte register states, one per frame.
+    """Bulba .PSG -> list of 14-byte register frames, one per frame.
 
-    $FF = next frame, $FE n = n repeat frames, reg/val pairs = deltas,
-    $FD = end. Shadow carried across frames (delta semantics). R13 starts at
-    0xFF = the don't-write sentinel."""
+    $FF = next frame, $FE n = 4*n repeat frames, reg/val pairs = deltas,
+    $FD = end. R0..R12 are states: the shadow carries across frames (delta
+    semantics). R13 is an event, because every write of it restarts the
+    envelope, the same shape too (S6.2): a frame's R13 is the value written in
+    that frame, and R13_NO_WRITE in a frame that does not write it."""
     if data[:4] != PSG_MAGIC:
         raise ValueError("not a .PSG (bad magic)")
     body = data[16:]
     shadow = [0] * 14
-    shadow[13] = 0xFF
+    shadow[13] = R13_NO_WRITE
     frames: list[list[int]] = []
+
+    def commit():
+        frames.append(shadow[:])
+        shadow[13] = R13_NO_WRITE
+
     started = False
     i = 0
     while i < len(body):
@@ -29,22 +42,22 @@ def parse_psg(data: bytes) -> list[list[int]]:
             break
         if b == 0xFF:
             if started:
-                frames.append(shadow[:])
+                commit()
             started = True
             i += 1
         elif b == 0xFE:
-            n = body[i + 1]
+            n = body[i + 1] * PAUSE_FRAMES
             i += 2
             if not started:
                 started = True
             for _ in range(n):
-                frames.append(shadow[:])
+                commit()
         else:
             if b < 14:
                 shadow[b] = body[i + 1]
             i += 2
     if started:
-        frames.append(shadow[:])
+        commit()
     return frames
 
 
@@ -59,7 +72,7 @@ def psg_frame_count(data: bytes) -> int:
             n += 1
             i += 1
         elif b == 0xFE:
-            n += body[i + 1]
+            n += body[i + 1] * PAUSE_FRAMES
             i += 2
         else:
             i += 2

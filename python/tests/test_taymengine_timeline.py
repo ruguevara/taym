@@ -132,6 +132,104 @@ def test_no_rate_timer_keeps_its_offset():
                   (start + 16 * 222 + FRAME_CYCLES, 15)]
 
 
+def _background_taym(deltas):
+    """No timers: only a PSG background, from per-frame {register: value}
+    writes."""
+    from taym.sample import _psg_from_deltas
+
+    return Taym(
+        trak=Trak(frame_rate_hz=FPS, frame_count=len(deltas), loop_frame=spec.NO_LOOP),
+        chips=[Chip(clock_hz=AY_CLOCK, chip_type_id=spec.CHIP_TYPE_AY, name="AY",
+                    frame_data_tag="PSG0")],
+        timers=[], mods=[], actions=[], lanes=[], tlanes=[],
+        vu08=[], vu16=[], vu32=[], frame_data={"PSG0": _psg_from_deltas(deltas)})
+
+
+def _reg_writes(taym, reg):
+    return [(f, v) for f, writes in enumerate(_frame_writes(taym, 0, AY_CLOCK))
+            for (_c, r, v) in writes if r == reg]
+
+
+def test_repeated_envelope_shape_write_is_kept():
+    """S6.2: the stream preserves write-sensitive repeated writes. Every R13
+    write restarts the envelope, the same shape too, so an envelope tune that
+    writes R13 = 9 on frames 0, 5 and 10 gets three writes, not one.
+
+    The bug this pins: R13 carried from frame to frame as a state and pushed
+    by the delta rule, which kept only the first write."""
+    deltas = [{} for _ in range(12)]
+    deltas[0] = {7: 0b111110, 8: 0x10, 11: 0x40, 12: 0x01, 13: 9}
+    deltas[5] = {13: 9}
+    deltas[10] = {8: 0x10, 13: 9}
+
+    t = _background_taym(deltas)
+    assert _reg_writes(t, 13) == [(0, 9), (5, 9), (10, 9)]
+    # The other registers stay on the delta rule: R8 written again with the
+    # value it holds is not a second write.
+    assert _reg_writes(t, 8) == [(0, 0x10)]
+
+
+def test_parse_psg_r13_is_per_frame():
+    """A frame's R13 is the value the stream writes in that frame and the 0xFF
+    no-write value otherwise, across a 0xFE pause too; R0..R12 carry."""
+    from taym.psg import parse_psg
+
+    psg = (b"PSG\x1a" + bytes(12)
+           + bytes((0xFF, 0, 0x55, 13, 9,      # frame 0: R0, R13
+                    0xFE, 1,                   # frames 0..3
+                    0xFF,                      # frame 4: nothing
+                    13, 9,                     # frame 5: the same shape again
+                    0xFF,
+                    0xFD)))
+    frames = parse_psg(psg)
+    assert [f[13] for f in frames] == [9, 0xFF, 0xFF, 0xFF, 0xFF, 9, 0xFF]
+    assert [f[0] for f in frames] == [0x55] * 7
+
+
+def test_psg_pause_is_four_frames_per_unit():
+    """S6.2: an unmodified standard Bulba stream, where `$FE n` is 4*n frames.
+    Here: the frame before the pause, then 12 more."""
+    from taym.psg import parse_psg, psg_frame_count
+
+    psg = b"PSG\x1a" + bytes(12) + bytes((0xFF, 0, 1, 0xFE, 3, 0xFD))
+    assert psg_frame_count(psg) == 13
+    assert len(parse_psg(psg)) == 13
+
+
+def test_background_envelope_shape_is_handed_back_on_release():
+    """S13.1: a timer that owned R13 hands it back with the background's last
+    shape, in a frame where the stream itself writes no R13."""
+    deltas = [{} for _ in range(4)]
+    deltas[0] = {13: 9}
+    t = _background_taym(deltas)
+    t.timers = [Timr(chip_index=0, clock_mode=spec.CLOCK_CHIP_PERIOD, clock_divider=16)]
+    t.mods = [Mods(command=spec.CMD_EMPTY),
+              Mods(command=spec.CMD_START, base_timer_value=2000,
+                   timer_lane_ref=spec.TLAN_NONE, first_action=0, action_count=1),
+              Mods(command=spec.CMD_STOP),
+              Mods(command=spec.CMD_EMPTY)]
+    t.actions = [Actn(target_id=spec.AY_R13_SHAPE, source_mode=spec.SRC_INLINE_VALUE,
+                      operand=0x0C)]
+
+    got = _reg_writes(t, 13)
+    assert got[0] == (0, 9)
+    assert all(w == (1, 0x0C) for w in got[1:-1]) and len(got) > 2
+    assert got[-1] == (2, 9)            # released: the background's shape, once
+
+
+def test_engine_fixture_repeats_an_envelope_shape():
+    """The cross-language diff (`cd c && make test`) holds the C engine to the
+    repeated R13 write only while the fixture has one. Its background writes
+    R13 = 0x0A on frames 3, 5 and 12 with no timer on R13, and gets it back
+    from T1 on frame 11."""
+    from taym.sample import build_engine_fixture
+
+    frames = list(_frame_writes(build_engine_fixture(), 0, AY_CLOCK))
+    background = [(f, v) for f in (3, 4, 5, 6, 11, 12, 13)
+                  for (c, r, v) in frames[f] if r == 13 and c == f * FRAME_CYCLES]
+    assert background == [(3, 0x0A), (5, 0x0A), (11, 0x0A), (12, 0x0A)]
+
+
 def test_writes_cli_format(tmp_path, capsys):
     """`python -m taym writes` is the C engine's cross-language oracle: one
     "frame cycle reg value" line per write, decimal, in timeline order. The C

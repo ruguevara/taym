@@ -47,8 +47,9 @@ of `(ay_cycle, reg, value)` writes in time order. For each frame:
    start; `MODULATE` patches running state without retriggering;
    `STOP`/`EMPTY` as named.
 2. Collect `owned` targets (a register an active timer drives).
-3. Push **only changed** background registers (`_push_regs_delta`) as writes at
-   the frame start, skipping owned ones.
+3. Push the background registers (`_push_background`) as writes at the frame
+   start, skipping owned ones: R0..R12 **only when changed**, R13 whenever the
+   stream writes it in this frame.
 4. Fire every **timer expiry** that falls before the next frame start, in time
    order. At each expiry (`_expiry`): advance the value + timer lanes one step,
    then write the owned targets at `ceil(next_expiry)`; reload the next interval
@@ -83,12 +84,22 @@ regression tests in `tests/test_taymengine_psg.py` and
   This is an `armed` flag on the timer state, not a per-frame local -- otherwise
   the no-advance fires again at every frame boundary and doubles a write.
 
-- **Delta register push (S13.1).** Re-latching an *unchanged* register each
-  frame is not a no-op on real hardware: re-writing R8/R11/R12 (env-mode
-  amplitude + envelope period) **resets the AY envelope generator** mid-buzz.
-  `_push_regs_delta` writes only registers whose value changed since the last
-  latch. An owned register's shadow is set stale (`None`) so the background
-  re-asserts cleanly when the timer releases it.
+- **Background push: delta for R0..R12, every write for R13 (S13.1, S6.2).**
+  R0..R12 are states: `_push_background` writes one only when its value changed
+  since the last latch. A repeated write of the value such a register already
+  holds changes nothing audible, so nothing is lost. An owned register's shadow
+  is set stale (`None`) so the background re-asserts cleanly when the timer
+  releases it.
+
+  R13 is an event, not a state: every write of it **restarts the envelope**,
+  the same shape too. `parse_psg` therefore gives a frame its R13 only when the
+  stream writes it in that frame, and `0xFF` (no write) otherwise, and the
+  engine writes it in exactly those frames, whatever the value. Both directions
+  matter: carrying R13 as a state and re-latching it each frame resets the
+  envelope mid-buzz, and pushing it by the delta rule drops an envelope tune's
+  repeated shape writes (R13 = 9 on frames 0, 5 and 10 came out as one write).
+  The engine still remembers the background's last shape, a write under a timer
+  included, so a timer that releases R13 hands it back (S13.1 step 5).
 
 - **Timer-lane completion (S10.2).** A *no-loop* timer lane runs its final
   interval and then makes the timer **quiescent**: `_expiry` returns without

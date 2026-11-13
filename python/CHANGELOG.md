@@ -17,6 +17,22 @@ adheres to [Semantic Versioning](https://semver.org/).
   bit-identically to before. An ABS_RATE_HZ expiry is rounded up to a whole AY
   cycle, which can move it one sample later. A frame rate that does not divide
   the sample rate no longer accumulates per-frame rounding drift.
+- `parse_psg` and `psg_frame_count` read `$FE n` as `4 * n` frames, as
+  standard Bulba does (spec S6.2); they used to read `n`. The sample audio
+  demo's PSG writes its pause that way now; its write timeline is unchanged.
+- `validate` checks that a chip's embedded PSG decodes to `TRAK.frame_count`
+  frames (spec S6.2, section 14); it only checked the magic before.
+- `parse_psg` returns R13 per frame: the value the stream writes in that frame,
+  and `0xFF` (no write) in a frame that does not write it. It used to carry the
+  last R13 into every later frame. R0..R12 are still absolute states.
+
+### Fixed
+
+- A repeated envelope-shape write in PSG frame data is kept (spec S6.2). Every
+  R13 write restarts the envelope, the same shape too, but the engine wrote R13
+  only when its value changed, so an envelope tune writing R13 = 9 on frames 0,
+  5 and 10 got one write. `python -m taym writes` and the C walker
+  (`taym_player_run`, `taym_player_parse_psg`) changed together.
 
 ## [0.1.0] - 2026-06-27
 

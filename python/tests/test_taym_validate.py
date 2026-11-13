@@ -72,6 +72,19 @@ def test_ay_config_reserved_bits():
     has(validate(m), "reserved bits")
 
 
+def test_psg_frame_count_must_match_trak():
+    # `$FE 3` is 12 frames: with the frame before it, 13 in all.
+    m = fresh()
+    m.chips = [Chip(clock_hz=1773400, chip_type_id=spec.CHIP_TYPE_AY, frame_data_tag="PSG0")]
+    m.frame_data = {"PSG0": b"PSG\x1a" + bytes(12) + bytes((0xFF, 0, 1, 0xFE, 3, 0xFD))}
+    m.trak.frame_count = 13
+    m.mods = m.mods[:1] * 13
+    assert validate(m) == []
+    m.trak.frame_count = 4              # the count if `$FE n` were n frames
+    m.mods = m.mods[:4]
+    has(validate(m), "decodes to 13 frames")
+
+
 def test_repeated_frame_data_tag():
     m = fresh()
     m.chips = [Chip(clock_hz=1, frame_data_tag="PSG0"),

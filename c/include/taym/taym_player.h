@@ -6,8 +6,8 @@
  *
  * This is the C counterpart of the oracle's engine._frame_writes, and the two
  * must agree write for write. It is the thin part: taym_timers.c holds the
- * behavior, this adds the frame loop, the PSG background and the delta push of
- * S13.1.
+ * behavior, this adds the frame loop, the PSG background and the background
+ * push of S13.1.
  *
  * It needs no audio. A renderer hands these writes to an emulator; the test
  * compares them to the oracle's as text.
@@ -61,9 +61,11 @@ TaymResult taym_player_run(const Taym *taym,
 uint64_t taym_player_frame_cycle(uint32_t frame, uint32_t clock_hz, uint32_t frame_rate_fix16);
 
 /*
- * Decode a Bulba .psg into absolute 14-register frames (S6.2). `out` holds
+ * Decode a Bulba .psg into 14-register frames (S6.2). `out` holds
  * `frame_capacity * 14` bytes, one frame per row. Returns the frame count in
- * `out_frames`; R13 starts at its 0xFF don't-write sentinel.
+ * `out_frames`. R0..R12 are absolute states. R13 is an event: a row holds the
+ * value the stream writes in that frame, a repeated shape included, and 0xFF
+ * (no write) in a frame that does not write it.
  */
 TaymResult taym_player_parse_psg(const uint8_t *data,
                                  size_t size,
