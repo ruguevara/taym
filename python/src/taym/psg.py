@@ -11,11 +11,14 @@ PSG_MAGIC = b"PSG\x1a"
 # A frame's R13 when the stream does not write R13 in that frame.
 R13_NO_WRITE = 0xFF
 
+# Standard Bulba: `$FE n` stands for 4*n frames without writes.
+PAUSE_FRAMES = 4
+
 
 def parse_psg(data: bytes) -> list[list[int]]:
     """Bulba .PSG -> list of 14-byte register frames, one per frame.
 
-    $FF = next frame, $FE n = n repeat frames, reg/val pairs = deltas,
+    $FF = next frame, $FE n = 4*n repeat frames, reg/val pairs = deltas,
     $FD = end. R0..R12 are states: the shadow carries across frames (delta
     semantics). R13 is an event, because every write of it restarts the
     envelope, the same shape too (S6.2): a frame's R13 is the value written in
@@ -43,7 +46,7 @@ def parse_psg(data: bytes) -> list[list[int]]:
             started = True
             i += 1
         elif b == 0xFE:
-            n = body[i + 1]
+            n = body[i + 1] * PAUSE_FRAMES
             i += 2
             if not started:
                 started = True
@@ -69,7 +72,7 @@ def psg_frame_count(data: bytes) -> int:
             n += 1
             i += 1
         elif b == 0xFE:
-            n += body[i + 1]
+            n += body[i + 1] * PAUSE_FRAMES
             i += 2
         else:
             i += 2

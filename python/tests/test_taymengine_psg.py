@@ -27,6 +27,9 @@ SKIP = not _available()
 pytestmark = pytest.mark.skipif(SKIP, reason="pyayay/numpy unavailable")
 
 
+from taym.sample import _psg_hold
+
+
 def _psg_steady(regs14, frames):
     """A minimal Bulba .psg: 16-byte header, frame 0 sets all regs, then
     `frames-1` repeat frames, $FD. R13=0xFF (no-write sentinel)."""
@@ -34,8 +37,7 @@ def _psg_steady(regs14, frames):
     out.append(0xFF)                       # frame 0
     for r in range(14):
         out += bytes((r, regs14[r] & 0xFF))
-    if frames > 1:
-        out += bytes((0xFE, frames - 1))   # repeat the rest
+    out += _psg_hold(frames)               # repeat the rest
     out.append(0xFD)
     return bytes(out)
 

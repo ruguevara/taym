@@ -82,11 +82,11 @@ TaymResult taym_player_parse_psg(const uint8_t *data,
             started = 1;
             i += 1u;
         } else if (b == 0xFEu) {
-            uint8_t n;
+            size_t n;
             if (i + 1u >= size) {
                 break;
             }
-            n = data[i + 1u];
+            n = (size_t) data[i + 1u] * 4u; /* standard Bulba: $FE n is 4*n frames */
             i += 2u;
             started = 1;
             while (n-- > 0u) {

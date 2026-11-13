@@ -176,13 +176,24 @@ def test_parse_psg_r13_is_per_frame():
 
     psg = (b"PSG\x1a" + bytes(12)
            + bytes((0xFF, 0, 0x55, 13, 9,      # frame 0: R0, R13
-                    0xFE, 2,                   # closes frame 0, one more frame
-                    0xFF, 13, 9,               # frame 3: the same shape again
+                    0xFE, 1,                   # frames 0..3
                     0xFF,                      # frame 4: nothing
+                    13, 9,                     # frame 5: the same shape again
+                    0xFF,
                     0xFD)))
     frames = parse_psg(psg)
-    assert [f[13] for f in frames] == [9, 0xFF, 0xFF, 9, 0xFF]
-    assert [f[0] for f in frames] == [0x55] * 5
+    assert [f[13] for f in frames] == [9, 0xFF, 0xFF, 0xFF, 0xFF, 9, 0xFF]
+    assert [f[0] for f in frames] == [0x55] * 7
+
+
+def test_psg_pause_is_four_frames_per_unit():
+    """S6.2: an unmodified standard Bulba stream, where `$FE n` is 4*n frames.
+    Here: the frame before the pause, then 12 more."""
+    from taym.psg import parse_psg, psg_frame_count
+
+    psg = b"PSG\x1a" + bytes(12) + bytes((0xFF, 0, 1, 0xFE, 3, 0xFD))
+    assert psg_frame_count(psg) == 13
+    assert len(parse_psg(psg)) == 13
 
 
 def test_background_envelope_shape_is_handed_back_on_release():

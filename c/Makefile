@@ -40,7 +40,7 @@ $(LIB): $(OBJS)
 $(TEST_BIN): tests/test_roundtrip.c $(LIB) include/taym/taym.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ tests/test_roundtrip.c $(LIB) $(LDLIBS)
 
-$(TIMERS_BIN): tests/test_timers.c $(LIB) include/taym/taym_timers.h include/taym/taym_ay.h | $(BUILD_DIR)
+$(TIMERS_BIN): tests/test_timers.c $(LIB) include/taym/taym_timers.h include/taym/taym_ay.h include/taym/taym_player.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ tests/test_timers.c $(LIB) $(LDLIBS)
 
 $(TIMELINE_BIN): tests/taym_timeline.c $(LIB) include/taym/taym_player.h | $(BUILD_DIR)

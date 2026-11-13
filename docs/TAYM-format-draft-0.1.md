@@ -258,7 +258,8 @@ file:
 - the payload begins with its own 16-byte `PSG\x1a` header;
 - the payload includes the standard `$FD` terminator;
 - TAYM adds no wrapper inside the chunk;
-- the decoded frame count equals `TRAK.frame_count`.
+- the decoded frame count equals `TRAK.frame_count`. As in any standard Bulba
+  stream, `$FE n` stands for `4 * n` frames.
 
 Conventional tags are `PSG0`, `PSG1`, and so on.
 
