@@ -605,13 +605,12 @@ TaymResult taym_read_bytes(const uint8_t *data, size_t size, Taym *out)
     if (version != TAYM_VERSION || header_size != TAYM_HEADER_SIZE) {
         return TAYM_ERROR_FORMAT;
     }
-    if ((size_t)header_size > SIZE_MAX - (size_t)chunk_bytes) {
+    /* The file is exactly the header plus the chunk stream. Compared by
+       subtraction, so no sum can overflow size_t on a small host. */
+    if (size < (size_t)header_size || size - (size_t)header_size != (size_t)chunk_bytes) {
         return TAYM_ERROR_FORMAT;
     }
-    end = (size_t)header_size + (size_t)chunk_bytes;
-    if (end != size) {
-        return TAYM_ERROR_FORMAT;
-    }
+    end = size;
 
     p = header_size;
     while (p < end) {
