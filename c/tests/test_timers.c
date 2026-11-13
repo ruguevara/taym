@@ -9,6 +9,7 @@
  */
 
 #include "taym/taym_ay.h"
+#include "taym/taym_player.h"
 #include "taym/taym_timers.h"
 
 #include <stdio.h>
@@ -634,6 +635,31 @@ static void test_capacity_never_splits_an_expiry(void)
     check_eq(writes[0].cycle, writes[1].cycle, "capacity: same expiry cycle");
 }
 
+/* S6.2: `$FE n` is 4*n frames, and R13 is an event: a frame holds it only
+   where the stream writes it. Mirrors python tests/test_taymengine_timeline.py. */
+static void test_psg_parse(void)
+{
+    static const uint8_t psg[] = {
+        'P', 'S', 'G', 0x1A, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0xFF, 0, 0x55, 13, 9,   /* frame 0: R0, R13 */
+        0xFE, 1,                /* frames 0..3 */
+        0xFF,                   /* frame 4 */
+        13, 9,                  /* frame 5: the same shape again */
+        0xFF, 0xFD
+    };
+    static const uint8_t r13[7] = {9u, 0xFFu, 0xFFu, 0xFFu, 0xFFu, 9u, 0xFFu};
+    uint8_t out[8 * 14];
+    size_t frames = 0u;
+    size_t i;
+
+    check_eq(taym_player_parse_psg(psg, sizeof(psg), out, 8u, &frames), TAYM_OK, "parse ok");
+    check_eq(frames, 7u, "frame count with a 4-frame pause");
+    for (i = 0u; i < 7u && i < frames; i++) {
+        check_eq(out[i * 14u + 13u], r13[i], "R13 per frame");
+        check_eq(out[i * 14u + 0u], 0x55u, "R0 carried");
+    }
+}
+
 int main(void)
 {
     test_armed_first_write();
@@ -652,6 +678,7 @@ int main(void)
     test_ay_resolve_rules();
     test_amplitude_combine();
     test_capacity_never_splits_an_expiry();
+    test_psg_parse();
 
     if (failures != 0) {
         fprintf(stderr, "%d check(s) failed\n", failures);

@@ -57,6 +57,18 @@ def build_model() -> Taym:
 AY_CLOCK = 1773400
 
 
+def _psg_hold(frames: int) -> bytes:
+    """Bulba bytes that hold the frame just written for `frames - 1` more frames
+    (so `frames` in all, the stream's closing frame included): `$FE n` pauses
+    4*n frames in standard Bulba, and `$FF` steps one frame for the remainder."""
+    more = frames - 1
+    out = bytearray()
+    if more >= 4:
+        out += bytes((0xFE, more // 4))
+    out += b"\xFF" * (more % 4)
+    return bytes(out)
+
+
 def _psg_steady_tone(freq_hz: float, frames: int) -> bytes:
     """A minimal Bulba .psg: a steady AY channel-A tone held for `frames`.
 
@@ -71,8 +83,7 @@ def _psg_steady_tone(freq_hz: float, frames: int) -> bytes:
     out.append(0xFF)                  # frame 0: full reg set
     for r in range(14):
         out += bytes((r, regs[r] & 0xFF))
-    if frames > 1:
-        out += bytes((0xFE, frames - 1))
+    out += _psg_hold(frames)
     out.append(0xFD)
     return bytes(out)
 
