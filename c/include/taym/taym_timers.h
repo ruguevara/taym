@@ -71,6 +71,12 @@ typedef struct TaymTimerWrite {
     uint8_t expiry_start; /* 1 on the first write of an expiry: an expiry is
                              atomic (S10.1), and a chip may need its targets
                              together */
+    uint8_t loop_start;   /* 1 on every write of an expiry that begins a repeat
+                             of the timer's output: each lane it runs, the
+                             timer lane included, is on the element it loops
+                             back to (a no-loop lane: on its final one). What
+                             a scope triggers on. A timer with no lanes
+                             repeats at every expiry. */
 } TaymTimerWrite;
 
 /*

@@ -525,6 +525,40 @@ static TaymResult taym_target_value(const TaymTimerBank *bank,
     return taym_lane_value(bank, lane, target->lane_step, out_value);
 }
 
+/* The element a lane rests on between repeats: the one it loops back to, or
+   the final one of a no-loop lane, where it stays (S9.1). */
+static uint32_t taym_lane_origin(uint32_t length, uint32_t loop_index)
+{
+    if (loop_index == TAYM_NO_LOOP) {
+        return length > 0u ? length - 1u : 0u;
+    }
+    return loop_index;
+}
+
+/* 1 if the timer's lanes are all on their origin: its output repeats from
+   here. Lanes of different lengths meet there once per common multiple. */
+static uint8_t taym_at_loop_start(const TaymTimerBank *bank, const TaymTimerState *st)
+{
+    size_t i;
+
+    if (st->has_tlan) {
+        const TaymTlan *tlan = &bank->tables.tlanes[st->tlan_index];
+        if (st->tlan_step != taym_lane_origin(tlan->length, tlan->loop_index)) {
+            return 0u;
+        }
+    }
+    for (i = 0u; i < st->target_count; i++) {
+        const TaymTimerTarget *target = &st->targets[i];
+        if (target->has_lane) {
+            const TaymLane *lane = &bank->tables.lanes[target->lane_index];
+            if (target->lane_step != taym_lane_origin(lane->length, lane->loop_index)) {
+                return 0u;
+            }
+        }
+    }
+    return 1u;
+}
+
 /*
  * One atomic expiry (S10.1): advance every lane, then report the value of each
  * target the timer owns. `armed` makes the post-START expiry report element 0
@@ -540,6 +574,7 @@ static TaymResult taym_fire_expiry(TaymTimerBank *bank,
     TaymTimerState *st = &bank->timers[timer];
     size_t i;
     size_t produced = 0u;
+    uint8_t loop_start;
 
     if (st->armed) {
         st->armed = 0u;
@@ -575,6 +610,7 @@ static TaymResult taym_fire_expiry(TaymTimerBank *bank,
         }
     }
 
+    loop_start = taym_at_loop_start(bank, st);
     for (i = 0u; i < st->target_count; i++) {
         const TaymTimerTarget *target = &st->targets[i];
         TaymTimerWrite *write;
@@ -598,6 +634,7 @@ static TaymResult taym_fire_expiry(TaymTimerBank *bank,
         write->target = target->target_id;
         write->timer = (uint8_t) timer;
         write->expiry_start = produced == 0u ? 1u : 0u;
+        write->loop_start = loop_start;
         produced++;
     }
 
