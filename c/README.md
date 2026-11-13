@@ -141,6 +141,11 @@ is `bank.no_rate_interval`, the length of a frame in cycles: a timer whose rate
 is zero fires once per frame. The walker sets it for each frame; a live host
 sets it once.
 
+Each write says whether its expiry begins a repeat of the timer's output
+(`loop_start`: every lane the timer runs is back on the element it loops to).
+That is the period of what the timer plays, and what an oscilloscope should
+trigger on; the engine is the only place that knows it per expiry.
+
 An expiry is atomic and advances its lanes as it fires, so `collect` never
 splits one: give it at least `TAYM_MAX_TIMER_TARGETS` slots, and if it returns
 `TAYM_ERROR_RANGE` call again with the same end cycle for the rest.

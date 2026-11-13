@@ -660,6 +660,42 @@ static void test_psg_parse(void)
     }
 }
 
+/* loop_start marks the expiry a timer's output repeats from: each lane on the
+   element it loops back to. A timer without lanes repeats at every expiry; a
+   no-loop lane counts once it rests on its final element. */
+static void test_loop_start(void)
+{
+    TaymTimerBank bank;
+    TaymTimerWrite writes[32];
+    TaymMods m;
+    size_t count = 0u;
+
+    build_fixture(&bank, 1u);
+    m = mods_start(PERIOD, TAYM_TLAN_NONE, 0u, 1u); /* R8 <- lane 0, [15, 9] looping */
+    check(taym_timers_command(&bank, 0u, &m, 0u) == TAYM_OK, "start");
+    check(taym_timers_collect(&bank, 4u * INTERVAL, writes, 32u, &count) == TAYM_OK, "collect");
+    check_eq(count, 4u, "loop start: four expiries");
+    check(writes[0].loop_start == 1u && writes[1].loop_start == 0u
+              && writes[2].loop_start == 1u && writes[3].loop_start == 0u,
+          "loop start: once per two-element loop, from the first expiry");
+
+    build_fixture(&bank, 1u);
+    m = mods_start(PERIOD, TAYM_TLAN_NONE, 1u, 1u); /* R8 <- inline 7 */
+    check(taym_timers_command(&bank, 0u, &m, 0u) == TAYM_OK, "start inline");
+    check(taym_timers_collect(&bank, 3u * INTERVAL, writes, 32u, &count) == TAYM_OK, "collect inline");
+    check(count == 3u && writes[0].loop_start == 1u && writes[1].loop_start == 1u
+              && writes[2].loop_start == 1u,
+          "loop start: no lanes, every expiry");
+
+    build_fixture(&bank, 1u);
+    m = mods_start(PERIOD, TAYM_TLAN_NONE, 3u, 1u); /* R8 <- lane 1, [15, 9] no loop */
+    check(taym_timers_command(&bank, 0u, &m, 0u) == TAYM_OK, "start no-loop");
+    check(taym_timers_collect(&bank, 3u * INTERVAL, writes, 32u, &count) == TAYM_OK, "collect no-loop");
+    check(count == 3u && writes[0].loop_start == 0u && writes[1].loop_start == 1u
+              && writes[2].loop_start == 1u,
+          "loop start: a no-loop lane, once it rests on its final element");
+}
+
 int main(void)
 {
     test_armed_first_write();
@@ -678,6 +714,7 @@ int main(void)
     test_ay_resolve_rules();
     test_amplitude_combine();
     test_capacity_never_splits_an_expiry();
+    test_loop_start();
     test_psg_parse();
 
     if (failures != 0) {
