@@ -5,15 +5,20 @@
  * TAYM timer engine -- the interpretation of S9..S13 as a reusable C core.
  *
  * This is the format's *behavior*, apart from any file walking: feed it timer
- * commands and it tells you which registers to write, at which absolute chip
- * cycle. `taym.c` reads bytes; this reads MODS records (from a file, or
- * synthesized live by a host) and produces register writes.
+ * commands and it tells you which targets get which values, at which absolute
+ * chip cycle. `taym.c` reads bytes; this reads MODS records (from a file, or
+ * synthesized live by a host) and produces target writes.
+ *
+ * It is chip-agnostic. A target is an 8-bit id and a value up to 32 bits wide;
+ * what a target means -- which are registers, how wide they are, what a virtual
+ * target does -- belongs to the chip. For AY that is taym_ay.h, which turns
+ * these writes into register writes.
  *
  * Who uses it:
- *   - taym_player.c, which walks a Taym frame by frame and prints the write
+ *   - taym_player.c, which walks an AY Taym frame by frame and prints the write
  *     timeline. Its test diffs that against the Python oracle's _frame_writes.
- *   - a real-time host (uZX's AY plugin), which gets commands from its own UI
- *     or MIDI instead of a file and pulls writes per audio block.
+ *   - a real-time host (an audio plugin, firmware), which gets commands from
+ *     its own UI or MIDI instead of a file and pulls writes per audio block.
  *
  * Properties the design relies on:
  *   - No allocation and no I/O. All state is in TaymTimerBank, which the caller
@@ -23,8 +28,7 @@
  *     differently never changes the writes (the spec's invariant 1).
  *   - The caller owns the background. The bank reports which targets a timer
  *     owns so the caller can suppress its own writes to them and re-assert
- *     them on release (S13.1); it holds no register values itself. A 0x80
- *     amplitude takes its volume from the same timer's R8/R9/R10 action.
+ *     them on release (S13.1); it holds no register values itself.
  *
  * Exactness against the Python oracle: expiry positions are accumulated in
  * `double` and rounded up to a whole cycle, matching engine.py's arithmetic
@@ -46,21 +50,27 @@
 extern "C" {
 #endif
 
-/* Registers a chip's frame data may write in one frame (AY has 14): what a
-   caller sizes its per-frame write buffer by. */
-#define TAYM_MAX_REGISTERS 16u
-
 /* Targets one timer may own at once (one action slice, S11/S12.2). */
 #define TAYM_MAX_TIMER_TARGETS 8u
 
 /* Timers one bank tracks. One per chip voice in practice; TAYM allows 255. */
 #define TAYM_MAX_TIMERS 16u
 
-/* A register write the engine asks the caller to perform. */
+/*
+ * One target's value at one timer expiry. Raw: the value is the lane element
+ * or inline operand as stored, and the target may be a virtual one. A chip's
+ * step (taym_ay_resolve for AY) turns an expiry's writes into register writes,
+ * reusing this struct with `target` as the register and `value` as its byte.
+ */
 typedef struct TaymTimerWrite {
-    uint64_t cycle; /* absolute chip cycle, non-decreasing within a pull */
-    uint8_t reg;    /* hardware register index (a target below 0x80) */
-    uint8_t value;
+    uint64_t cycle;       /* absolute chip cycle, non-decreasing within a pull */
+    uint32_t value;
+    uint8_t target;       /* chip-local target id (S11) */
+    uint8_t value_type;   /* TAYM_VT_* of the lane it came from; 0 = inline */
+    uint8_t timer;        /* bank slot of the timer that fired */
+    uint8_t expiry_start; /* 1 on the first write of an expiry: an expiry is
+                             atomic (S10.1), and a chip may need its targets
+                             together */
 } TaymTimerWrite;
 
 /*
@@ -124,7 +134,6 @@ typedef struct TaymTimerState {
 typedef struct TaymTimerBank {
     TaymTimerTables tables;
     uint32_t clock_hz;
-    uint8_t variant; /* TAYM_AY_VARIANT_AY | _YM: picks the DAC curve (S11.1) */
 
     TaymTimerClock clocks[TAYM_MAX_TIMERS];
     TaymTimerState timers[TAYM_MAX_TIMERS];
@@ -148,15 +157,14 @@ TaymResult taym_timers_init(TaymTimerBank *bank,
                             const TaymTimerTables *tables,
                             const TaymTimerClock *clocks,
                             size_t timer_count,
-                            uint32_t clock_hz,
-                            uint8_t variant);
+                            uint32_t clock_hz);
 
 /* Stop every timer and release all ownership, without touching the tables. */
 void taym_timers_reset(TaymTimerBank *bank);
 
 /*
  * Convenience: fill a bank from a parsed Taym for one chip index, taking the
- * tables, the chip's clock and variant, and the TIMR records belonging to it.
+ * tables, the chip's clock, and the TIMR records belonging to it.
  * `timer_map`, if given, receives the global timer index of each bank slot, so
  * the caller can find the right MODS column; it must hold TAYM_MAX_TIMERS
  * entries. Returns the number of timers taken in `out_count`.
@@ -189,13 +197,15 @@ TaymResult taym_timers_command(TaymTimerBank *bank,
 
 /*
  * Whether any active or quiescent timer owns `target_id`, i.e. the caller must
- * not write that register from its own background (S13.1 step 3).
+ * not write that target from its own background (S13.1 step 3).
  */
 int taym_timers_owns_target(const TaymTimerBank *bank, uint8_t target_id);
 
 /*
  * Collect every timer write strictly before `end_cycle`, in cycle order, into
- * `out` (capacity `capacity`), and advance the bank past them.
+ * `out` (capacity `capacity`), and advance the bank past them. Each expiry
+ * reports every target its timer owns, plus its sample amplitude (0x80) if it
+ * carries one, which is never exclusively owned (S11.1).
  *
  * Returns the number written in `out_count`. An expiry is atomic and advances
  * its lanes as it fires, so it is never split: when fewer than
@@ -210,17 +220,6 @@ TaymResult taym_timers_collect(TaymTimerBank *bank,
                                TaymTimerWrite *out,
                                size_t capacity,
                                size_t *out_count);
-
-/*
- * The AY/YM 16-step volume DAC combine of S11.1, exposed for tests and for a
- * host that quantizes elsewhere: delog `volume_code` through the chip curve,
- * scale by `amplitude / full_scale` (both linear), and requantize to the
- * nearest code. `variant` picks the curve.
- */
-uint8_t taym_timers_combine_amplitude(uint8_t variant,
-                                      uint8_t volume_code,
-                                      uint32_t amplitude,
-                                      uint32_t full_scale);
 
 #ifdef __cplusplus
 }

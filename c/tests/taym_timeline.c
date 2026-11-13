@@ -30,7 +30,7 @@ static void print_writes(void *context,
         printf("%u %llu %u %u\n",
                (unsigned) frame,
                (unsigned long long) writes[i].cycle,
-               (unsigned) writes[i].reg,
+               (unsigned) writes[i].target,
                (unsigned) writes[i].value);
     }
 }

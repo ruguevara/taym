@@ -94,14 +94,22 @@ structural read/write: little-endian decoded explicitly, canonical chunk order,
 but **no** section-14 semantic validation (use the Python validator).
 
 `c/include/taym/taym_timers.h` + `c/src/taym_timers.c` are the **timer engine**
-(S9..S13): commands in, `(cycle, reg, value)` writes out. No allocation, no
+(S9..S13): commands in, `(cycle, target, value)` writes out. No allocation, no
 I/O, all state in a caller-owned `TaymTimerBank` — so the same code serves the
 offline walker and a real-time host (audio plugin, embedded firmware). Read it
 next to `python/src/taym/engine/engine.py`; they are deliberately the same
 algorithm and the Python one is the oracle.
 
+**The engine is chip-agnostic; keep it that way.** It reports raw target
+values (any id, up to 32 bits, virtual targets included) and knows no register,
+width or DAC. Chip rules live in a per-chip file: `c/src/taym_ay.c`
+(`taym_ay_resolve`) turns an expiry's target writes into AY register writes —
+byte registers, R13's four bits, the 0x80 amplitude combine. The Python engine
+is AY-only and mixes the two; the C split is the model for another chip.
+
 `c/include/taym/taym_player.h` + `c/src/taym_player.c` add the frame loop, the
-PSG background and the S13.1 delta push, mirroring `engine._frame_writes`.
+PSG background and the S13.1 delta push for an AY chip, mirroring
+`engine._frame_writes`.
 
 `make test` runs the structural round trip, the engine's unit checks
 (`tests/test_timers.c`, covering the rules the fixtures don't reach), and the

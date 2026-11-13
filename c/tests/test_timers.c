@@ -1,5 +1,6 @@
 /*
- * taym_timers unit checks: the rules the sample fixtures don't reach.
+ * taym_timers and taym_ay unit checks: the rules the sample fixtures don't
+ * reach, and the line between the chip-agnostic engine and the AY's rules.
  *
  * The cross-language diff in `make test` covers the main path (a PWM timer
  * against the Python oracle). These pin the edges the spec calls out and that
@@ -7,6 +8,7 @@
  * MODULATE pending-element rule, ownership handoff, and the S11.1 combine.
  */
 
+#include "taym/taym_ay.h"
 #include "taym/taym_timers.h"
 
 #include <stdio.h>
@@ -40,9 +42,10 @@ static void check_eq(unsigned long got, unsigned long want, const char *message)
 #define INTERVAL (DIVIDER * PERIOD)
 
 static uint8_t pool_u8[4] = {15u, 9u, 3u, 0u};
+static uint16_t pool_u16[2] = {0x1234u, 0xFFFFu};
 static uint32_t pool_u32[4] = {0u, 0u, 0u, 0u};
 
-static TaymActn actions[8];
+static TaymActn actions[12];
 static TaymLane lanes[4];
 static TaymTlan tlanes[4];
 
@@ -57,6 +60,8 @@ static void build_tables(TaymTimerTables *tables)
     tables->tlane_count = sizeof(tlanes) / sizeof(tlanes[0]);
     tables->vu08 = pool_u8;
     tables->vu08_count = sizeof(pool_u8) / sizeof(pool_u8[0]);
+    tables->vu16 = pool_u16;
+    tables->vu16_count = sizeof(pool_u16) / sizeof(pool_u16[0]);
     tables->vu32 = pool_u32;
     tables->vu32_count = sizeof(pool_u32) / sizeof(pool_u32[0]);
 }
@@ -116,9 +121,7 @@ static void build_fixture(TaymTimerBank *bank, size_t timer_count)
         clocks[i].clock_divider = (uint16_t) DIVIDER;
         clocks[i].clock_mode = TAYM_CLOCK_CHIP_PERIOD;
     }
-    check(taym_timers_init(bank, &tables, clocks, timer_count, CLOCK,
-                           TAYM_AY_VARIANT_AY) == TAYM_OK,
-          "init");
+    check(taym_timers_init(bank, &tables, clocks, timer_count, CLOCK) == TAYM_OK, "init");
 }
 
 static TaymMods mods_start(uint32_t base, uint32_t tlan_ref, uint32_t first, uint8_t count)
@@ -453,22 +456,145 @@ static void test_range_checks(void)
     check(!taym_timers_owns_target(&bank, 8u), "ignored modulate owns nothing");
 }
 
+/* The engine is chip-agnostic: a target it knows nothing about, fed by a
+   16-bit lane, comes out with its id and its whole value, and says where the
+   value came from. */
+static void test_engine_reports_raw_targets(void)
+{
+    TaymTimerBank bank;
+    TaymTimerWrite writes[32];
+    TaymMods m;
+    size_t count = 0u;
+
+    build_fixture(&bank, 1u);
+    lanes[3].value_type = TAYM_VT_U16;   /* [0x1234, 0xFFFF] looping */
+    lanes[3].value_offset = 0u;
+    lanes[3].length = 2u;
+    lanes[3].loop_index = 0u;
+    actions[5].target_id = 0x20u;        /* no such AY register */
+    actions[5].source_mode = TAYM_SRC_BIND_LANE;
+    actions[5].operand = 3u;
+    actions[6].target_id = 0x21u;
+    actions[6].source_mode = TAYM_SRC_INLINE_VALUE;
+    actions[6].operand = 0x00ABCDEFu;
+
+    m = mods_start(PERIOD, TAYM_TLAN_NONE, 5u, 2u);
+    check(taym_timers_command(&bank, 0u, &m, 0u) == TAYM_OK, "start raw");
+    check(taym_timers_collect(&bank, 2u * INTERVAL, writes, 32u, &count) == TAYM_OK, "collect raw");
+
+    check_eq(count, 4u, "raw: two targets, two expiries");
+    check_eq(writes[0].target, 0x20u, "raw: target id kept");
+    check_eq(writes[0].value, 0x1234u, "raw: 16-bit value not cut");
+    check_eq(writes[0].value_type, TAYM_VT_U16, "raw: lane type reported");
+    check_eq(writes[1].target, 0x21u, "raw: second target");
+    check_eq(writes[1].value, 0x00ABCDEFu, "raw: inline operand whole");
+    check_eq(writes[1].value_type, 0u, "raw: inline has no lane type");
+    check_eq(writes[2].value, 0xFFFFu, "raw: next lane element");
+    check(writes[0].expiry_start && !writes[1].expiry_start
+          && writes[2].expiry_start && !writes[3].expiry_start,
+          "raw: each expiry marks its first write");
+
+    /* The AY has neither target, so its step drops them all. */
+    check_eq(taym_ay_resolve(writes, count, TAYM_AY_VARIANT_AY), 0u, "raw: not AY registers");
+}
+
+/* S11.1 across the line: the engine reports each timer's own sample amplitude
+   (it is not exclusively owned), and the AY step combines it into the volume
+   register of the same expiry. */
+static void test_amplitude_pairs_within_its_own_expiry(void)
+{
+    TaymTimerBank bank;
+    TaymTimerWrite writes[32];
+    TaymMods m;
+    size_t count = 0u;
+
+    build_fixture(&bank, 2u);
+    lanes[3].value_type = TAYM_VT_U16;
+    lanes[3].value_offset = 0u;
+    lanes[3].length = 2u;
+    lanes[3].loop_index = 0u;
+    actions[5].target_id = 0x08u;                       /* timer 0: R8 volume 12 */
+    actions[5].source_mode = TAYM_SRC_INLINE_VALUE;
+    actions[5].operand = 12u;
+    actions[6].target_id = TAYM_TGT_SAMPLE_AMPLITUDE;
+    actions[6].source_mode = TAYM_SRC_BIND_LANE;
+    actions[6].operand = 3u;
+    actions[7].target_id = 0x09u;                       /* timer 1: R9 volume 10 */
+    actions[7].source_mode = TAYM_SRC_INLINE_VALUE;
+    actions[7].operand = 10u;
+    actions[8].target_id = TAYM_TGT_SAMPLE_AMPLITUDE;
+    actions[8].source_mode = TAYM_SRC_BIND_LANE;
+    actions[8].operand = 3u;
+
+    m = mods_start(PERIOD, TAYM_TLAN_NONE, 5u, 2u);
+    check(taym_timers_command(&bank, 0u, &m, 0u) == TAYM_OK, "start sample 0");
+    m = mods_start(PERIOD, TAYM_TLAN_NONE, 7u, 2u);
+    check(taym_timers_command(&bank, 1u, &m, 0u) == TAYM_OK, "start sample 1");
+
+    check(taym_timers_collect(&bank, 1u, writes, 32u, &count) == TAYM_OK, "collect samples");
+    check_eq(count, 4u, "amplitude: both timers report theirs");
+    check_eq(writes[1].target, TAYM_TGT_SAMPLE_AMPLITUDE, "amplitude: timer 0's");
+    check_eq(writes[3].target, TAYM_TGT_SAMPLE_AMPLITUDE, "amplitude: timer 1's");
+    check_eq(writes[1].timer, 0u, "amplitude: from timer 0");
+    check_eq(writes[3].timer, 1u, "amplitude: from timer 1");
+
+    count = taym_ay_resolve(writes, count, TAYM_AY_VARIANT_AY);
+    check_eq(count, 2u, "amplitude: two register writes");
+    check_eq(writes[0].target, 0x08u, "amplitude: R8");
+    check_eq(writes[0].value,
+             taym_ay_combine_amplitude(TAYM_AY_VARIANT_AY, 12u, 0x1234u, 0xFFFFu),
+             "amplitude: R8 combined at 16-bit full scale");
+    check_eq(writes[1].target, 0x09u, "amplitude: R9");
+    check_eq(writes[1].value,
+             taym_ay_combine_amplitude(TAYM_AY_VARIANT_AY, 10u, 0x1234u, 0xFFFFu),
+             "amplitude: R9 combined with its own timer's amplitude");
+}
+
+/* The AY's own rules, on hand-made writes: bytes, the 4-bit shape, and no
+   amplitude leaking from one expiry into the next. */
+static void test_ay_resolve_rules(void)
+{
+    TaymTimerWrite writes[5];
+    size_t count;
+
+    memset(writes, 0, sizeof(writes));
+    writes[0].cycle = 10u; writes[0].target = 0x0Du; writes[0].value = 0xFEu;
+    writes[0].expiry_start = 1u;
+    writes[1].cycle = 20u; writes[1].target = 0x08u; writes[1].value = 15u;
+    writes[1].expiry_start = 1u;
+    writes[2].cycle = 20u; writes[2].target = TAYM_TGT_SAMPLE_AMPLITUDE; writes[2].value = 0u;
+    writes[2].value_type = TAYM_VT_U8;
+    writes[3].cycle = 30u; writes[3].target = 0x08u; writes[3].value = 0x1FFu;
+    writes[3].expiry_start = 1u;
+    writes[4].cycle = 30u; writes[4].target = 0x00u; writes[4].value = 0x2A5u;
+
+    count = taym_ay_resolve(writes, 5u, TAYM_AY_VARIANT_AY);
+    check_eq(count, 4u, "ay: the amplitude itself is not a write");
+    check_eq(writes[0].target, 0x0Du, "ay: R13");
+    check_eq(writes[0].value, 0x0Eu, "ay: R13 keeps four bits");
+    check_eq(writes[1].value, 0u, "ay: volume 15 at zero amplitude is the floor");
+    check_eq((unsigned long) writes[1].cycle, 20u, "ay: cycle kept");
+    check_eq(writes[2].value, 0xFFu, "ay: the next expiry's R8 is not combined");
+    check_eq(writes[3].target, 0x00u, "ay: R0");
+    check_eq(writes[3].value, 0xA5u, "ay: a register is a byte");
+}
+
 /* S11.1: delog the volume code, scale by the linear amplitude, requantize
    once. Full amplitude keeps the code; zero amplitude floors it. */
 static void test_amplitude_combine(void)
 {
-    check_eq(taym_timers_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 255u, 255u), 15u,
+    check_eq(taym_ay_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 255u, 255u), 15u,
              "combine: full scale keeps the code");
-    check_eq(taym_timers_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 0u, 255u), 0u,
+    check_eq(taym_ay_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 0u, 255u), 0u,
              "combine: zero amplitude is the floor");
-    check_eq(taym_timers_combine_amplitude(TAYM_AY_VARIANT_YM, 15u, 255u, 255u), 15u,
+    check_eq(taym_ay_combine_amplitude(TAYM_AY_VARIANT_YM, 15u, 255u, 255u), 15u,
              "combine: YM full scale keeps the code");
     /* Half of full scale is below the top code but above the floor. */
     {
-        const uint8_t half = taym_timers_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 128u, 255u);
+        const uint8_t half = taym_ay_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 128u, 255u);
         check(half > 0u && half < 15u, "combine: half scale lands between");
     }
-    check_eq(taym_timers_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 128u, 0u), 0u,
+    check_eq(taym_ay_combine_amplitude(TAYM_AY_VARIANT_AY, 15u, 128u, 0u), 0u,
              "combine: zero full scale is the floor");
 }
 
@@ -503,8 +629,8 @@ static void test_capacity_never_splits_an_expiry(void)
                               &count) == TAYM_ERROR_RANGE,
           "capacity: one expiry then stops");
     check_eq(count, 2u, "capacity: both targets of the expiry");
-    check_eq(writes[0].reg, 8u, "capacity: R8");
-    check_eq(writes[1].reg, 9u, "capacity: R9");
+    check_eq(writes[0].target, 8u, "capacity: R8");
+    check_eq(writes[1].target, 9u, "capacity: R9");
     check_eq(writes[0].cycle, writes[1].cycle, "capacity: same expiry cycle");
 }
 
@@ -521,6 +647,9 @@ int main(void)
     test_ownership_handoff();
     test_stop_releases();
     test_range_checks();
+    test_engine_reports_raw_targets();
+    test_amplitude_pairs_within_its_own_expiry();
+    test_ay_resolve_rules();
     test_amplitude_combine();
     test_capacity_never_splits_an_expiry();
 

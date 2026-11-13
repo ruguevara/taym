@@ -1,98 +1,14 @@
 /*
- * TAYM timer engine (S9..S13). Read this next to python/src/taym/engine/engine.py:
- * the two are deliberately the same algorithm, and the Python one is the oracle.
+ * TAYM timer engine (S9..S13), for any chip. Read this next to
+ * python/src/taym/engine/engine.py: the two are deliberately the same
+ * algorithm, and the Python one is the oracle. That one is written for AY; here
+ * the AY rules are in taym_ay.c.
  */
 
 #include "taym/taym_timers.h"
 
 #include <math.h>
 #include <string.h>
-
-/* AY/YM 16-step volume DAC curves (appendix A.3), used only by the 0x80
-   sample-amplitude combine. Both chips pick the volume level from a 4-bit
-   curve; the YM's is closer to a true exponential. The YM's 32-step table is
-   the *envelope* curve, not this one. */
-static const double taym_ay_dac[16] = {
-    0.0,
-    0.00999465934234,
-    0.0144502937362,
-    0.0210574502174,
-    0.0307011520562,
-    0.0455481803616,
-    0.0644998855573,
-    0.107362478065,
-    0.126588845655,
-    0.20498970016,
-    0.292210269322,
-    0.372838941024,
-    0.492530708782,
-    0.635324635691,
-    0.805584802014,
-    1.0
-};
-
-static const double taym_ym_dac[16] = {
-    0.0,
-    0.00772106507973,
-    0.0139620050355,
-    0.0200198367285,
-    0.029694056611,
-    0.0403906309606,
-    0.0583352407111,
-    0.0777752346075,
-    0.111085679408,
-    0.148485542077,
-    0.211551079576,
-    0.281101701381,
-    0.400427252613,
-    0.53443198291,
-    0.75800717174,
-    1.0
-};
-
-/* AY R8/R9/R10: the volume register a 0x80 amplitude combines into (S11.1). */
-#define TAYM_TGT_SAMPLE_AMPLITUDE 0x80u
-
-static int taym_is_amp_reg(uint8_t target_id)
-{
-    return target_id == 0x08u || target_id == 0x09u || target_id == 0x0Au;
-}
-
-static const double *taym_dac_table(uint8_t variant)
-{
-    return variant == TAYM_AY_VARIANT_YM ? taym_ym_dac : taym_ay_dac;
-}
-
-uint8_t taym_timers_combine_amplitude(uint8_t variant,
-                                      uint8_t volume_code,
-                                      uint32_t amplitude,
-                                      uint32_t full_scale)
-{
-    const double *table = taym_dac_table(variant);
-    double linear;
-    double best_distance;
-    unsigned best_code;
-    unsigned code;
-
-    linear = table[volume_code & 0x0Fu];
-    if (full_scale != 0u) {
-        linear *= (double) amplitude / (double) full_scale;
-    } else {
-        linear = 0.0;
-    }
-
-    best_code = 0u;
-    best_distance = fabs(table[0] - linear);
-    for (code = 0u; code < 16u; code++) {
-        const double distance = fabs(table[code] - linear);
-        /* <= so a tie prefers the higher code, as the oracle does. */
-        if (distance <= best_distance) {
-            best_code = code;
-            best_distance = distance;
-        }
-    }
-    return (uint8_t) best_code;
-}
 
 /* ------------------------------------------------------------------------- */
 /* Lanes                                                                      */
@@ -128,19 +44,6 @@ static TaymResult taym_lane_value(const TaymTimerBank *bank,
             return TAYM_OK;
         default:
             return TAYM_ERROR_FORMAT;
-    }
-}
-
-static uint32_t taym_lane_full_scale(uint8_t value_type)
-{
-    switch (value_type) {
-        case TAYM_VT_U16:
-            return 0xFFFFu;
-        case TAYM_VT_U32:
-            return 0xFFFFFFFFu;
-        case TAYM_VT_U8:
-        default:
-            return 0xFFu;
     }
 }
 
@@ -249,8 +152,7 @@ TaymResult taym_timers_init(TaymTimerBank *bank,
                             const TaymTimerTables *tables,
                             const TaymTimerClock *clocks,
                             size_t timer_count,
-                            uint32_t clock_hz,
-                            uint8_t variant)
+                            uint32_t clock_hz)
 {
     size_t i;
 
@@ -264,7 +166,6 @@ TaymResult taym_timers_init(TaymTimerBank *bank,
     memset(bank, 0, sizeof(*bank));
     bank->tables = *tables;
     bank->clock_hz = clock_hz != 0u ? clock_hz : 1u;
-    bank->variant = variant;
     bank->timer_count = timer_count;
     for (i = 0u; i < timer_count; i++) {
         bank->clocks[i] = clocks[i];
@@ -332,8 +233,7 @@ TaymResult taym_timers_init_from_taym(TaymTimerBank *bank,
         *out_count = count;
     }
     return taym_timers_init(bank, &tables, clocks, count,
-                            taym->chips[chip_index].clock_hz,
-                            taym->chips[chip_index].variant);
+                            taym->chips[chip_index].clock_hz);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -606,29 +506,29 @@ static size_t taym_owner_of(const TaymTimerBank *bank, uint8_t target_id)
     return bank->timer_count;
 }
 
-/* The current value of one target's source. */
+/* The current value of one target's source, and the type of the lane it came
+   from (0 for an inline operand). */
 static TaymResult taym_target_value(const TaymTimerBank *bank,
                                     const TaymTimerTarget *target,
                                     uint32_t *out_value,
-                                    uint32_t *out_full_scale)
+                                    uint8_t *out_value_type)
 {
+    const TaymLane *lane;
+
     if (!target->has_lane) {
         *out_value = target->inline_value;
-        if (out_full_scale != NULL) {
-            *out_full_scale = 0xFFu; /* an inline operand is byte-wide here */
-        }
+        *out_value_type = 0u;
         return TAYM_OK;
     }
-    if (out_full_scale != NULL) {
-        *out_full_scale = taym_lane_full_scale(bank->tables.lanes[target->lane_index].value_type);
-    }
-    return taym_lane_value(bank, &bank->tables.lanes[target->lane_index],
-                           target->lane_step, out_value);
+    lane = &bank->tables.lanes[target->lane_index];
+    *out_value_type = lane->value_type;
+    return taym_lane_value(bank, lane, target->lane_step, out_value);
 }
 
 /*
- * One atomic expiry (S10.1): advance every lane, then write the owned targets.
- * `armed` makes the post-START expiry write element 0 as-is.
+ * One atomic expiry (S10.1): advance every lane, then report the value of each
+ * target the timer owns. `armed` makes the post-START expiry report element 0
+ * as-is. Values are raw: what a target's value means is the chip's business.
  */
 static TaymResult taym_fire_expiry(TaymTimerBank *bank,
                                    size_t timer,
@@ -639,9 +539,6 @@ static TaymResult taym_fire_expiry(TaymTimerBank *bank,
 {
     TaymTimerState *st = &bank->timers[timer];
     size_t i;
-    int has_amplitude = 0;
-    uint32_t amplitude = 0u;
-    uint32_t amplitude_scale = 0xFFu;
     size_t produced = 0u;
 
     if (st->armed) {
@@ -678,50 +575,29 @@ static TaymResult taym_fire_expiry(TaymTimerBank *bank,
         }
     }
 
-    /* S11.1: if this timer drives 0x80, take its unquantized value first so
-       the paired volume register's write can combine it. */
     for (i = 0u; i < st->target_count; i++) {
         const TaymTimerTarget *target = &st->targets[i];
-        if (target->target_id != TAYM_TGT_SAMPLE_AMPLITUDE) {
+        TaymTimerWrite *write;
+
+        /* S11.1: the sample amplitude is not exclusively owned -- every timer
+           that carries it reports its own. Any other target is reported only
+           by its owner (two timers both list one at a handoff). */
+        if (target->target_id != TAYM_TGT_SAMPLE_AMPLITUDE
+            && taym_owner_of(bank, target->target_id) != timer) {
             continue;
         }
-        if (taym_target_value(bank, target, &amplitude, &amplitude_scale) == TAYM_OK) {
-            has_amplitude = 1;
-        }
-    }
-
-    for (i = 0u; i < st->target_count; i++) {
-        const TaymTimerTarget *target = &st->targets[i];
-        uint32_t value;
-        uint8_t byte;
-
-        if (target->target_id == TAYM_TGT_SAMPLE_AMPLITUDE) {
-            continue; /* virtual: reaches the chip through its volume register */
-        }
-        if (taym_owner_of(bank, target->target_id) != timer) {
-            continue; /* another timer owns it this frame (handoff edge) */
-        }
-        if (target->target_id > TAYM_AY_TARGET_MAX) {
-            continue; /* not a hardware register we can write */
-        }
-        if (taym_target_value(bank, target, &value, NULL) != TAYM_OK) {
-            return TAYM_ERROR_RANGE;
-        }
-        byte = (uint8_t) (value & 0xFFu);
-
         if (produced >= capacity) {
             *out_count = produced;
             return TAYM_ERROR_RANGE;
         }
-        if (target->target_id == TAYM_AY_R13_SHAPE) {
-            byte = (uint8_t) (byte & 0x0Fu); /* every R13 write retriggers */
-        } else if (taym_is_amp_reg(target->target_id) && has_amplitude) {
-            byte = taym_timers_combine_amplitude(bank->variant, byte,
-                                                 amplitude, amplitude_scale);
+        write = &out[produced];
+        if (taym_target_value(bank, target, &write->value, &write->value_type) != TAYM_OK) {
+            return TAYM_ERROR_RANGE;
         }
-        out[produced].cycle = cycle;
-        out[produced].reg = target->target_id;
-        out[produced].value = byte;
+        write->cycle = cycle;
+        write->target = target->target_id;
+        write->timer = (uint8_t) timer;
+        write->expiry_start = produced == 0u ? 1u : 0u;
         produced++;
     }
 

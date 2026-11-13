@@ -6,7 +6,7 @@ LDLIBS ?= -lm
 BUILD_DIR ?= build
 
 LIB := $(BUILD_DIR)/libtaym.a
-OBJS := $(BUILD_DIR)/taym.o $(BUILD_DIR)/taym_timers.o $(BUILD_DIR)/taym_player.o
+OBJS := $(BUILD_DIR)/taym.o $(BUILD_DIR)/taym_timers.o $(BUILD_DIR)/taym_ay.o $(BUILD_DIR)/taym_player.o
 TEST_BIN := $(BUILD_DIR)/test_roundtrip
 TIMERS_BIN := $(BUILD_DIR)/test_timers
 TIMELINE_BIN := $(BUILD_DIR)/taym_timeline
@@ -28,7 +28,10 @@ $(BUILD_DIR)/taym.o: src/taym.c include/taym/taym.h | $(BUILD_DIR)
 $(BUILD_DIR)/taym_timers.o: src/taym_timers.c include/taym/taym_timers.h include/taym/taym.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ src/taym_timers.c
 
-$(BUILD_DIR)/taym_player.o: src/taym_player.c include/taym/taym_player.h include/taym/taym_timers.h include/taym/taym.h | $(BUILD_DIR)
+$(BUILD_DIR)/taym_ay.o: src/taym_ay.c include/taym/taym_ay.h include/taym/taym_timers.h include/taym/taym.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c -o $@ src/taym_ay.c
+
+$(BUILD_DIR)/taym_player.o: src/taym_player.c include/taym/taym_player.h include/taym/taym_ay.h include/taym/taym_timers.h include/taym/taym.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c -o $@ src/taym_player.c
 
 $(LIB): $(OBJS)
@@ -37,7 +40,7 @@ $(LIB): $(OBJS)
 $(TEST_BIN): tests/test_roundtrip.c $(LIB) include/taym/taym.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ tests/test_roundtrip.c $(LIB) $(LDLIBS)
 
-$(TIMERS_BIN): tests/test_timers.c $(LIB) include/taym/taym_timers.h | $(BUILD_DIR)
+$(TIMERS_BIN): tests/test_timers.c $(LIB) include/taym/taym_timers.h include/taym/taym_ay.h | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -o $@ tests/test_timers.c $(LIB) $(LDLIBS)
 
 $(TIMELINE_BIN): tests/taym_timeline.c $(LIB) include/taym/taym_player.h | $(BUILD_DIR)

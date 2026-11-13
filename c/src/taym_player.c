@@ -1,6 +1,8 @@
 /*
- * Frame walker: Taym -> register-write timeline. Mirrors the oracle's
- * engine._frame_writes; read the two together.
+ * Frame walker for an AY chip: Taym -> register-write timeline. Mirrors the
+ * oracle's engine._frame_writes; read the two together. The chip-agnostic
+ * part is taym_timers.c; what is AY here is the frame data (a Bulba .psg) and
+ * taym_ay_resolve().
  */
 
 #include "taym/taym_player.h"
@@ -8,7 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAYM_PSG_REGISTERS 14u
+#define TAYM_PSG_REGISTERS TAYM_AY_REGISTERS
 #define TAYM_R13 13u
 
 uint64_t taym_player_frame_cycle(uint32_t frame, uint32_t clock_hz, uint32_t frame_rate_fix16)
@@ -136,8 +138,9 @@ static size_t taym_push_background(const TaymTimerBank *bank,
         if (produced >= capacity) {
             break;
         }
+        memset(&out[produced], 0, sizeof(out[produced]));
         out[produced].cycle = cycle;
-        out[produced].reg = r;
+        out[produced].target = r;
         out[produced].value = value;
         produced++;
         shadow[r] = (int16_t) value;
@@ -166,11 +169,14 @@ TaymResult taym_player_run(const Taym *taym,
     if (taym == NULL || scratch == NULL || sink == NULL) {
         return TAYM_ERROR_ARGUMENT;
     }
-    if (capacity < TAYM_MAX_REGISTERS + TAYM_MAX_TIMER_TARGETS) {
+    if (capacity < TAYM_AY_REGISTERS + TAYM_MAX_TIMER_TARGETS) {
         return TAYM_ERROR_ARGUMENT;
     }
     if (chip_index >= taym->chip_count) {
         return TAYM_ERROR_ARGUMENT;
+    }
+    if (taym->chips[chip_index].chip_type_id != TAYM_CHIP_TYPE_AY) {
+        return TAYM_ERROR_FORMAT; /* this walker knows AY frame data only */
     }
 
     result = taym_timers_init_from_taym(&bank, taym, chip_index, timer_map, &bank_timers);
@@ -245,7 +251,7 @@ TaymResult taym_player_run(const Taym *taym,
            with no rate fires once per frame. */
         bank.no_rate_interval = end - start;
         result = taym_timers_collect(&bank, end, scratch + count, capacity - count, &produced);
-        count += produced;
+        count += taym_ay_resolve(scratch + count, produced, taym->chips[chip_index].variant);
         if (result != TAYM_OK) {
             sink(context, frame, scratch, count);
             free(psg_frames);

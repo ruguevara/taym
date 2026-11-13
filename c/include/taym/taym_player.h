@@ -2,7 +2,7 @@
 #define TAYM_TAYM_PLAYER_H
 
 /*
- * Frame walker: a whole Taym for one chip -> the register-write timeline.
+ * Frame walker: a whole Taym for one AY chip -> the register-write timeline.
  *
  * This is the C counterpart of the oracle's engine._frame_writes, and the two
  * must agree write for write. It is the thin part: taym_timers.c holds the
@@ -21,13 +21,15 @@
 #include <stdint.h>
 
 #include "taym/taym.h"
+#include "taym/taym_ay.h"
 #include "taym/taym_timers.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Writes of one frame, reported to the caller in cycle order. */
+/* Register writes of one frame, in cycle order: `target` is R0..R13 and
+   `value` the byte. */
 typedef void (*TaymPlayerSink)(void *context,
                                uint32_t frame,
                                const TaymTimerWrite *writes,
@@ -37,8 +39,11 @@ typedef void (*TaymPlayerSink)(void *context,
  * Walk `taym`'s chip `chip_index` from frame 0 to TRAK.frame_count (or the end
  * of its PSG stream, whichever comes first) and report each frame's writes.
  *
+ * The chip must be an AY (TAYM_ERROR_FORMAT otherwise): its frame data is a
+ * Bulba .psg and its targets follow taym_ay.h.
+ *
  * Needs scratch space for one frame's writes: `capacity` must be at least
- * TAYM_MAX_REGISTERS + TAYM_MAX_TIMER_TARGETS, and more for a fast timer --
+ * TAYM_AY_REGISTERS + TAYM_MAX_TIMER_TARGETS, and more for a fast timer --
  * a 5 kHz timer at 50 fps is 100 expiries a frame. On overflow the call returns
  * TAYM_ERROR_RANGE after reporting what fitted.
  */

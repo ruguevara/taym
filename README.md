@@ -31,10 +31,10 @@ examples/    real tunes in TAYM, used by the tests
   stats, dumps, and an offline AY reference renderer (`taym.engine`, the audio
   oracle). `pip install taym`. See `python/README.md`.
 - **`c/`** — a C reference model plus structural reader/writer, and the timer
-  engine: timer commands in, register writes out, with no allocation, so a
-  plain C consumer (a converter, a plugin, firmware) has a vetted
-  implementation to start from. Its write timeline is diffed against the
-  Python engine's. It omits section-14 semantic validation and audio rendering.
+  engine: timer commands in, target writes out, chip-agnostic and with no
+  allocation, so a plain C consumer (a converter, a plugin, firmware) has a
+  vetted implementation to start from. The AY's rules sit beside it, and the
+  resulting write timeline is diffed against the Python engine's. It omits section-14 semantic validation and audio rendering.
   See `c/README.md`.
 - **[`examples/`](examples/README.md)** — real tunes exported to TAYM, with
   credits.
