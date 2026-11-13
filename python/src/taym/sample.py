@@ -125,7 +125,8 @@ def build_engine_fixture() -> Taym:
     to sound like anything.
 
     Two timers on one chip over 14 frames, with a PSG background that keeps
-    changing under them:
+    changing under them, and that repeats an envelope shape (R13) where no
+    timer holds it -- a write the engine must keep (S6.2):
 
       T0 (CHIP_PERIOD)  PWM on R8; MODULATE of the base, lane -> inline,
                         inline -> lane (pending element 0), lane -> lane (phase
@@ -174,14 +175,14 @@ def build_engine_fixture() -> Taym:
         {8: 13},                    # under T0: held back until the STOP
         {11: 0x30, 13: 0x0A},       # a real envelope-shape write
         {2: 0x70},
-        {},
+        {13: 0x0A},                 # the same shape again: a retrigger, kept
         {8: 14},                    # the frame T0 releases R8
         {0: 0xE0},
         {9: 5},
         {},
         {10: 3},
-        {},
-        {1: 0x02},
+        {},                         # T1 releases R13: the background's 0x0A back
+        {1: 0x02, 13: 0x0A},        # and the stream repeats it a frame later
         {8: 0},
     ])
     return Taym(

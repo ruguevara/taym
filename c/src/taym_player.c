@@ -12,6 +12,8 @@
 
 #define TAYM_PSG_REGISTERS TAYM_AY_REGISTERS
 #define TAYM_R13 13u
+/* A frame's R13 when the stream does not write R13 in that frame. */
+#define TAYM_R13_NO_WRITE 0xFFu
 
 uint64_t taym_player_frame_cycle(uint32_t frame, uint32_t clock_hz, uint32_t frame_rate_fix16)
 {
@@ -25,6 +27,24 @@ uint64_t taym_player_frame_cycle(uint32_t frame, uint32_t clock_hz, uint32_t fra
        agree exactly, while integers stay exact for all of them. */
     numerator = (uint64_t) frame * (uint64_t) clock_hz * 65536u;
     return (numerator + (uint64_t) frame_rate_fix16 - 1u) / (uint64_t) frame_rate_fix16;
+}
+
+/* End a frame: store the shadow as row `*frames`. R0..R12 are states and carry
+   to the next frame. R13 is an event -- every write of it restarts the
+   envelope, the same shape too (S6.2) -- so it goes back to its no-write
+   value: a frame holds R13 only when the stream writes it in that frame. */
+static TaymResult taym_psg_commit(uint8_t *out,
+                                  size_t frame_capacity,
+                                  size_t *frames,
+                                  uint8_t *shadow)
+{
+    if (*frames >= frame_capacity) {
+        return TAYM_ERROR_RANGE;
+    }
+    memcpy(out + *frames * TAYM_PSG_REGISTERS, shadow, TAYM_PSG_REGISTERS);
+    (*frames)++;
+    shadow[TAYM_R13] = TAYM_R13_NO_WRITE;
+    return TAYM_OK;
 }
 
 TaymResult taym_player_parse_psg(const uint8_t *data,
@@ -47,7 +67,7 @@ TaymResult taym_player_parse_psg(const uint8_t *data,
     }
 
     memset(shadow, 0, sizeof(shadow));
-    shadow[TAYM_R13] = 0xFFu; /* don't-write sentinel */
+    shadow[TAYM_R13] = TAYM_R13_NO_WRITE;
 
     i = 16u;
     while (i < size) {
@@ -56,12 +76,8 @@ TaymResult taym_player_parse_psg(const uint8_t *data,
             break;
         }
         if (b == 0xFFu) {
-            if (started) {
-                if (frames >= frame_capacity) {
-                    return TAYM_ERROR_RANGE;
-                }
-                memcpy(out + frames * TAYM_PSG_REGISTERS, shadow, sizeof(shadow));
-                frames++;
+            if (started && taym_psg_commit(out, frame_capacity, &frames, shadow) != TAYM_OK) {
+                return TAYM_ERROR_RANGE;
             }
             started = 1;
             i += 1u;
@@ -74,11 +90,9 @@ TaymResult taym_player_parse_psg(const uint8_t *data,
             i += 2u;
             started = 1;
             while (n-- > 0u) {
-                if (frames >= frame_capacity) {
+                if (taym_psg_commit(out, frame_capacity, &frames, shadow) != TAYM_OK) {
                     return TAYM_ERROR_RANGE;
                 }
-                memcpy(out + frames * TAYM_PSG_REGISTERS, shadow, sizeof(shadow));
-                frames++;
             }
         } else {
             if (i + 1u >= size) {
@@ -90,12 +104,8 @@ TaymResult taym_player_parse_psg(const uint8_t *data,
             i += 2u;
         }
     }
-    if (started) {
-        if (frames >= frame_capacity) {
-            return TAYM_ERROR_RANGE;
-        }
-        memcpy(out + frames * TAYM_PSG_REGISTERS, shadow, sizeof(shadow));
-        frames++;
+    if (started && taym_psg_commit(out, frame_capacity, &frames, shadow) != TAYM_OK) {
+        return TAYM_ERROR_RANGE;
     }
 
     *out_frames = frames;
@@ -103,16 +113,22 @@ TaymResult taym_player_parse_psg(const uint8_t *data,
 }
 
 /*
- * S13.1: latch only background registers that changed since the last write, as
- * writes at the frame's start cycle.
+ * S13.1: latch the background `regs` as writes at the frame's start cycle:
+ * R0..R12 when they changed since the last write, R13 also whenever the stream
+ * writes it in this frame (`r13_written`).
  *
- * Re-latching an unchanged register is not a no-op on real hardware: writing
- * R8/R11/R12 again resets the envelope generator mid-buzz. An owned register
- * belongs to its timer, so skip it and mark its shadow stale so the background
- * re-asserts cleanly on release.
+ * An owned register belongs to its timer, so skip it and mark its shadow stale
+ * so the background re-asserts cleanly on release.
+ *
+ * R13 is not held to the delta rule, because writing it restarts the envelope,
+ * the same shape too: a repeated R13 write in the stream is a retrigger and
+ * must be kept (S6.2). R0..R12 stay on the delta rule: a repeated write of the
+ * value such a register already holds changes nothing audible, so dropping it
+ * loses nothing.
  */
 static size_t taym_push_background(const TaymTimerBank *bank,
                                    const uint8_t *regs,
+                                   int r13_written,
                                    int16_t *shadow,
                                    uint64_t cycle,
                                    TaymTimerWrite *out,
@@ -130,9 +146,9 @@ static size_t taym_push_background(const TaymTimerBank *bank,
         }
         value = regs[r];
         if (r == TAYM_R13 && (value & 0x80u) != 0u) {
-            continue; /* no-write sentinel: leave R13 untouched */
+            continue; /* the stream has not written R13 yet */
         }
-        if (shadow[r] == (int16_t) value) {
+        if (shadow[r] == (int16_t) value && !(r == TAYM_R13 && r13_written)) {
             continue;
         }
         if (produced >= capacity) {
@@ -159,6 +175,7 @@ TaymResult taym_player_run(const Taym *taym,
     size_t timer_map[TAYM_MAX_TIMERS];
     size_t bank_timers = 0u;
     int16_t shadow[TAYM_PSG_REGISTERS];
+    uint8_t background_r13 = TAYM_R13_NO_WRITE; /* the background's last R13 write */
     uint8_t *psg_frames = NULL;
     size_t psg_frame_count = 0u;
     uint8_t silent[TAYM_PSG_REGISTERS];
@@ -187,7 +204,8 @@ TaymResult taym_player_run(const Taym *taym,
     /* The chip's background when it has no frame data: all-zero registers,
        R13 included. The 0xFF don't-write sentinel is a *PSG stream's* initial
        shadow (S6.2), not a value a chip without a stream holds -- so here R13
-       is a real zero and gets latched like any other register. */
+       is a real zero and gets latched like any other register: once, in
+       frame 0, since R13 is an event (see taym_push_background). */
     memset(silent, 0, sizeof(silent));
     frame_limit = taym->trak.frame_count;
 
@@ -224,9 +242,8 @@ TaymResult taym_player_run(const Taym *taym,
                                                        taym->trak.frame_rate);
         const uint64_t end = taym_player_frame_cycle(frame + 1u, bank.clock_hz,
                                                      taym->trak.frame_rate);
-        const uint8_t *regs = psg_frames != NULL
-            ? psg_frames + (size_t) frame * TAYM_PSG_REGISTERS
-            : silent;
+        uint8_t regs[TAYM_PSG_REGISTERS];
+        int r13_written;
         size_t count = 0u;
         size_t produced = 0u;
         size_t i;
@@ -244,8 +261,23 @@ TaymResult taym_player_run(const Taym *taym,
             }
         }
 
-        /* 2-3. Push the changed background, skipping owned registers. */
-        count = taym_push_background(&bank, regs, shadow, start, scratch, capacity);
+        /* 2-3. Push the changed background, skipping owned registers.
+
+           R13 is an event, not a state: the frame carries it only when the
+           stream writes it, and then it is written whatever its value. The
+           background's last shape is still remembered (a write under a timer
+           included), so a release can hand it back. */
+        memcpy(regs, psg_frames != NULL
+                   ? psg_frames + (size_t) frame * TAYM_PSG_REGISTERS
+                   : silent,
+               sizeof(regs));
+        silent[TAYM_R13] = TAYM_R13_NO_WRITE;
+        r13_written = (regs[TAYM_R13] & 0x80u) == 0u;
+        if (r13_written) {
+            background_r13 = regs[TAYM_R13];
+        }
+        regs[TAYM_R13] = background_r13;
+        count = taym_push_background(&bank, regs, r13_written, shadow, start, scratch, capacity);
 
         /* 4. Every expiry that falls inside this frame, in cycle order. A timer
            with no rate fires once per frame. */

@@ -27,7 +27,7 @@ include/taym/taym_player.h   frame walker: an AY chip of a file -> write timelin
 src/taym.c                   reader/writer implementation
 src/taym_timers.c            the engine (read next to python engine/engine.py)
 src/taym_ay.c                R13, the 0x80 amplitude combine, the DAC curves
-src/taym_player.c            frame loop, PSG background, delta push
+src/taym_player.c            frame loop, PSG background, background push
 tests/test_roundtrip.c       structural round trip
 tests/test_timers.c          engine and AY rules the fixtures don't reach
 tests/taym_timeline.c        CLI: print the write timeline (the diff's C side)
