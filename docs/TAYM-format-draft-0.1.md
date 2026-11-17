@@ -194,6 +194,23 @@ tracker
 comment
 ```
 
+A tracker may also say how the tune was written, so a reader can name its
+notes and find its beats without detecting them. Values are decimal:
+
+| Key              | Value                                                        |
+| ---------------- | ------------------------------------------------------------ |
+| `tuning`         | the tracker's name for its note table                        |
+| `a4`             | A4 in Hz, when the note table is computed from it            |
+| `speed`          | the initial speed: frames per row                            |
+| `tempo`          | the tracker's tempo setting, when it has one                 |
+| `pattern_length` | the default number of rows in a pattern                      |
+| `row_frames`     | the row lengths in frames the tune mostly repeats            |
+
+`row_frames` is a cycle of comma-separated lengths starting at frame 0: `3`
+for rows of three frames, `3,2` for a swing of three and two. Rows may leave
+it where the speed changes, so it is a hint for finding the beats, not a
+timing. Playback times nothing by these keys.
+
 Readers may ignore or preserve unknown keys.
 
 Values are arbitrary UTF-8, so `INFO` (`title`, `author`, ...) is the place for
