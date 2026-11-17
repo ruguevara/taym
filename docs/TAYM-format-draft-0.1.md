@@ -204,11 +204,13 @@ notes and find its beats without detecting them. Values are decimal:
 | `speed`          | the initial speed: frames per row                            |
 | `tempo`          | the tracker's tempo setting, when it has one                 |
 | `pattern_length` | the default number of rows in a pattern                      |
-| `rows`           | every row's length in frames, in play order from frame 0     |
+| `row_frames`     | the frames each played row lasts, in play order from frame 0 |
 
-`rows` separates lengths with commas and writes a run of `n` rows of length
-`v` as `v*n`, e.g. `3*4,2,3,2,3`. The lengths sum to `TRAK.frame_count`. These
-keys describe the song as the tracker holds it; playback times nothing by them.
+`row_frames` follows playback, not the patterns: a row is listed each time it
+plays, a row that never plays is not listed, and the last one runs to the end
+of the track. Lengths are separated by commas, and a run of `n` rows of `v`
+frames each is written `v*n`, e.g. `3*4,2,3,2,3`. They sum to
+`TRAK.frame_count`. Playback times nothing by these keys.
 
 Readers may ignore or preserve unknown keys.
 
