@@ -204,13 +204,12 @@ notes and find its beats without detecting them. Values are decimal:
 | `speed`          | the initial speed: frames per row                            |
 | `tempo`          | the tracker's tempo setting, when it has one                 |
 | `pattern_length` | the default number of rows in a pattern                      |
-| `row_frames`     | the frames each played row lasts, in play order from frame 0 |
+| `row_frames`     | the row lengths in frames the tune mostly repeats            |
 
-`row_frames` follows playback, not the patterns: a row is listed each time it
-plays, a row that never plays is not listed, and the last one runs to the end
-of the track. Lengths are separated by commas, and a run of `n` rows of `v`
-frames each is written `v*n`, e.g. `3*4,2,3,2,3`. They sum to
-`TRAK.frame_count`. Playback times nothing by these keys.
+`row_frames` is a cycle of comma-separated lengths starting at frame 0: `3`
+for rows of three frames, `3,2` for a swing of three and two. Rows may leave
+it where the speed changes, so it is a hint for finding the beats, not a
+timing. Playback times nothing by these keys.
 
 Readers may ignore or preserve unknown keys.
 
